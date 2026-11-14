@@ -81,6 +81,22 @@ export interface SessionCoordinatorOptions {
  * `AGY_BRIDGE_MAX_WORKER_RSS_MB` (megabytes), then the 1 GiB default.
  * `0` disables RSS recycling entirely.
  */
+/**
+ * Whether prompts are reworded, from the first source that states it.
+ *
+ * The option's default is on (`src/options.ts`), so a caller that passes no
+ * options at all — the CLI smoke test, a unit test — gets the same behaviour as
+ * Magpie does rather than a silently different one.
+ */
+function cloakEnabled(
+  ...sources: ReadonlyArray<{ cloakPrompts?: boolean } | undefined>
+): boolean {
+  for (const source of sources) {
+    if (typeof source?.cloakPrompts === "boolean") return source.cloakPrompts;
+  }
+  return true;
+}
+
 function resolveMaxWorkerRssBytes(explicit?: number): number {
   if (
     typeof explicit === "number" &&
@@ -885,12 +901,10 @@ export class SessionCoordinator {
     const { priorMessages, currentMessages } = splitPriorAndCurrent(
       req.messages,
     );
-    // Off unless something said otherwise: the option's own default is false, and
-    // a fallback of `true` here silently cloaked every caller that passed neither.
-    const cloakPrompts =
-      options?.providerOptions?.cloakPrompts ??
-      this.providerOptions?.cloakPrompts ??
-      false;
+    const cloakPrompts = cloakEnabled(
+      options?.providerOptions,
+      this.providerOptions,
+    );
     const coldPlan = planColdHistoryRender(
       priorMessages,
       currentMessages,
@@ -1137,10 +1151,7 @@ export class SessionCoordinator {
       const prefixLen = matchedPrefixLength ?? worker.committedMessages.length;
       const deltaMessages = req.messages.slice(prefixLen);
       const promptParts = renderMessagesToPrompt([], deltaMessages, {
-        cloakUser:
-          options?.providerOptions?.cloakPrompts ??
-          this.providerOptions?.cloakPrompts ??
-          false,
+        cloakUser: cloakEnabled(options?.providerOptions, this.providerOptions),
       });
       appendToolChoiceReminder(promptParts, req);
 
@@ -1360,12 +1371,10 @@ export class SessionCoordinator {
   ): AsyncGenerator<TurnStreamEvent> {
     const ephemeralSessionId = `ephemeral-${crypto.randomUUID()}`;
     const spawnFn = options?.spawnFn ?? this.defaultSpawnFn;
-    // Off unless something said otherwise: the option's own default is false, and
-    // a fallback of `true` here silently cloaked every caller that passed neither.
-    const cloakPrompts =
-      options?.providerOptions?.cloakPrompts ??
-      this.providerOptions?.cloakPrompts ??
-      false;
+    const cloakPrompts = cloakEnabled(
+      options?.providerOptions,
+      this.providerOptions,
+    );
     const { priorMessages, currentMessages } = splitPriorAndCurrent(
       req.messages,
     );

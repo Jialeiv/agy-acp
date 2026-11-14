@@ -102,7 +102,8 @@ From the code comparison in [`research/comparison.md`](research/comparison.md):
    identity and writes the resulting token into the account's isolated directory
    (`src/accounts/auth.ts:25-30`).
 2. Rewording system-prompt lines that identify a third-party harness so a vendor check
-   stops refusing the request (`src/protocol/cloak.ts`). Off by default since 0.1.10.
+   stops refusing the request (`src/protocol/cloak.ts`). On by default since 0.1.11;
+   `cloak_prompts` turns it off.
 3. A multi-account pool, and until 0.1.10 an automatic failover on quota `429` and on
    policy or suspension `403` (`src/index.ts:150-205`, `src/runtime/worker.ts:1150-1230`).
    Automatic failover is off by default now: `account_failover` decides it, and the router
@@ -157,7 +158,8 @@ What this plugin does about the mechanism, without claiming the motive:
 
 - Account risk is the user's: the README states the clauses, what the plugin does, and
   that the maintainer cannot restore a disabled account.
-- Prompt cloaking is off by default; detection of a refusal is unaffected.
+- Prompt cloaking is on by default, like the standalone bridge for this vendor, and
+  `cloak_prompts` turns it off; detection of a refusal is unaffected either way.
 - An account the vendor disabled is recorded for six hours and later turns fail fast
   with the same `403` instead of spawning `agy` for a refusal
   (`src/accounts/policy-block.ts`).

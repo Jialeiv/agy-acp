@@ -92,18 +92,21 @@ const OPTION_SPECS: readonly ProviderOptionSpec[] = [
     key: "cloak_prompts",
     stateKey: "cloakPrompts",
     envName: "AGY_MAGPIE_CLOAK_PROMPTS",
-    // Off by default: the rewording is a workaround for a vendor check, not a
-    // formatting preference, and the vendor's terms treat workarounds of that kind
-    // as circumvention. Detection of the refusal is unaffected by this switch.
-    fallback: false,
+    // On by default, like the standalone bridge for the same vendor: the lines this
+    // rewrites are answered with a spent-quota refusal whatever quota is left, so a
+    // request that carries them never had a chance. The vendor's terms treat
+    // workarounds of that kind as circumvention, so the switch is there to turn off
+    // and the README says what it costs. Detection of the refusal never depended on
+    // it either way.
+    fallback: true,
     label: "Reword third-party harness trigger lines",
     description:
-      "Off by default. Rewords system-prompt lines that identify a third-party harness and are answered with a spent-quota refusal, so the same request goes through. This works around a vendor check; leave it off unless you accept that.",
+      "On by default. Rewords system-prompt lines that identify a third-party harness and are answered with a spent-quota refusal, so the same request goes through. This works around a vendor check, which the vendor's terms treat as circumvention; turn it off to send prompts as written.",
     labels: {
-      zh: "改写第三方客户端标识句（默认关）",
+      zh: "改写第三方客户端标识句（默认开）",
     },
     descriptions: {
-      zh: "默认关闭。改写会被上游以配额耗尽为由拒答的第三方客户端标识句，使同一请求通过。这是绕过上游检查，除非你接受该风险，否则保持关闭。",
+      zh: "默认开启。改写会被上游以配额耗尽为由拒答的第三方客户端标识句，使同一请求通过。这是绕过上游检查，条款可能视为不受支持；关闭后会原样发送。",
     },
   },
   {
@@ -175,7 +178,7 @@ export function readProviderOptions(
   const fromMagpie = pluginInput?.magpie?.options?.(PROVIDER_ID) ?? {};
   const state: ProviderOptionsState = {
     quotaRouting: false,
-    cloakPrompts: false,
+    cloakPrompts: true,
     minimalAgent: false,
     exposeThinking: false,
     cloakSaidAs: readSaidAs(pkgOptions),

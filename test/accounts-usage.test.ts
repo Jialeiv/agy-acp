@@ -2103,8 +2103,8 @@ describe("src/options.ts", () => {
           quotaRouting: true,
           // The pool does not walk itself: a failed account's error comes back.
           accountFailover: false,
-          // Cloaking is off by default: it works around a vendor check.
-          cloakPrompts: false,
+          // Cloaking is on by default, like the standalone bridge for the vendor.
+          cloakPrompts: true,
           minimalAgent: false,
           exposeThinking: true,
           cloakSaidAs: "",
