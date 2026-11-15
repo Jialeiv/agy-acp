@@ -945,6 +945,14 @@ const MAX_MCP_NAME_LENGTH = 50
 const MCP_HASH_LENGTH = 8
 const MCP_CORE_LENGTH = MAX_MCP_NAME_LENGTH - MCP_HASH_LENGTH - 1
 
+/**
+ * MCP names the broker advertises itself. Caller tools that would otherwise
+ * keep these names are rewritten by `uniqueMcpToolName`; the original name is
+ * preserved in `mcpToOriginal` / `originalToMcp`.
+ */
+export const RESERVED_MCP_TOOL_NAMES = ["await_result"] as const
+const reservedMcpToolNames = new Set<string>(RESERVED_MCP_TOOL_NAMES)
+
 function hashToolName(originalName: string): string {
   return createHash("sha256").update(originalName).digest("hex").slice(0, MCP_HASH_LENGTH)
 }
@@ -969,7 +977,7 @@ export function toMcpToolName(originalName: string): string {
 function uniqueMcpToolName(originalName: string, taken: Map<string, string>): string {
   let candidate = toMcpToolName(originalName)
   let attempt = 1
-  while (taken.has(candidate)) {
+  while (taken.has(candidate) || reservedMcpToolNames.has(candidate)) {
     const digits = String(attempt).length
     const core = toolNameCore(originalName, MCP_CORE_LENGTH - digits - 1)
     candidate = `${core}_${attempt}_${hashToolName(originalName)}`

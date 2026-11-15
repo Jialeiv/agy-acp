@@ -548,6 +548,22 @@ export class CatalogService {
   }
 
   /**
+   * The answer every failed probe shares: reuse a real catalog for up to a day,
+   * otherwise the static list. Always reports `fellBack` so the caller can mark
+   * the model list as a fallback.
+   */
+  private staleOrFallback(cacheScopeKey: string): CatalogLookup {
+    const existing = this.cache.get(cacheScopeKey);
+    return {
+      catalog:
+        existing && Date.now() - existing.fetchedAt < CATALOG_MAX_STALE_AGE_MS
+          ? existing.catalog
+          : getStaticFallbackCatalog(),
+      fellBack: true,
+    };
+  }
+
+  /**
    * Caches and single-flight slots are scoped by both descriptors: a slot can be
    * re-authenticated against a different isolated account (new `accountRef`,
    * same `slotKey`), and two descriptors must never share one catalog.
@@ -569,22 +585,12 @@ export class CatalogService {
     });
 
     if (res.exitCode !== 0 || !res.stdout.trim()) {
-      const existing = this.cache.get(cacheScopeKey);
-      return {
-        catalog: existing && Date.now() - existing.fetchedAt < CATALOG_MAX_STALE_AGE_MS
-          ? existing.catalog : getStaticFallbackCatalog(),
-        fellBack: true,
-      };
+      return this.staleOrFallback(cacheScopeKey);
     }
 
     const rawList = parseAgyModelsOutput(res.stdout);
     if (rawList.length === 0) {
-      const existing = this.cache.get(cacheScopeKey);
-      return {
-        catalog: existing && Date.now() - existing.fetchedAt < CATALOG_MAX_STALE_AGE_MS
-          ? existing.catalog : getStaticFallbackCatalog(),
-        fellBack: true,
-      };
+      return this.staleOrFallback(cacheScopeKey);
     }
 
     return { catalog: buildCatalog(rawList), fellBack: false };
@@ -605,14 +611,7 @@ export class CatalogService {
     this.pruneStaleCache(now);
     const cached = this.cache.get(cacheScopeKey);
 
-    const fallback = (): CatalogLookup => {
-      const existing = this.cache.get(cacheScopeKey);
-      return {
-        catalog: existing && Date.now() - existing.fetchedAt < CATALOG_MAX_STALE_AGE_MS
-          ? existing.catalog : getStaticFallbackCatalog(),
-        fellBack: true,
-      };
-    };
+    const fallback = (): CatalogLookup => this.staleOrFallback(cacheScopeKey);
     if (options?.signal?.aborted) return fallback();
     const currentFingerprint = getAgyBinaryFingerprint();
     if (!options?.forceRefresh && cached && cached.binaryFingerprint === currentFingerprint &&

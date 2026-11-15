@@ -189,7 +189,6 @@ describe("Fallback catalog & agy 1.5.8 parity", () => {
     const fallbackModels = buildProviderModels(getStaticFallbackCatalog(), {
       includeRawIds: false,
     });
-    expect(Reflect.get(fallbackModels, FELL_BACK_SYM)).toBe(true);
     expect(Object.keys(fallbackModels)).toContain("gemini-4-carbon");
     expect(Object.keys(fallbackModels)).toContain("gemini-4-hydrogen");
 

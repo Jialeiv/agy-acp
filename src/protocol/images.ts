@@ -10,9 +10,9 @@
  *
  * This module is the same policy without a dependency: small PNG/JPEG/GIF/WebP
  * decoders (enough to get RGBA pixels out of anything a tool result can carry),
- * an area-average downscaler, and PNG/baseline-JPEG encoders. Animated WebP and
- * any unreadable or malformed input are passed through untouched rather than
- * corrupted.
+ * an area-average downscaler, and PNG/baseline-JPEG encoders. Animated WebP or
+ * GIF, and any unreadable or malformed input, are passed through untouched rather
+ * than corrupted. Still GIF is decoded and fitted like PNG.
  *
  * The image that already fits is never touched, byte for byte, and an image this
  * module cannot read is likewise returned exactly as it arrived: a wrong re-encode
@@ -1383,6 +1383,69 @@ function jpegToRgba(frame: JpegFrame, adobeTransform: number): RgbaImage | null 
 // GIF decoding
 // ---------------------------------------------------------------------------
 
+/**
+ * Walks GIF blocks with explicit lengths (extensions, local palettes, LZW
+ * sub-blocks) and reports whether a second image descriptor exists. A raw byte
+ * search for `0x2c` would misclassify compressed data and comments; a Netscape
+ * loop extension is neither necessary nor sufficient for animation.
+ */
+function gifHasSecondImageDescriptor(raw: Uint8Array): boolean {
+  if (raw.length < 13 || !matchesAscii(raw, 0, "GIF8")) return false;
+  if ((raw[4] !== 0x37 && raw[4] !== 0x39) || raw[5] !== 0x61) return false;
+
+  let off = 13;
+  const packed = raw[10]!;
+  if ((packed & 0x80) !== 0) {
+    const tableBytes = (2 << (packed & 7)) * 3;
+    if (off + tableBytes > raw.length) return false;
+    off += tableBytes;
+  }
+
+  let images = 0;
+  while (off < raw.length) {
+    const introducer = raw[off]!;
+    if (introducer === 0x3b) break;
+    if (introducer === 0x21) {
+      if (off + 2 > raw.length) return false;
+      off += 2;
+      const skipped = skipGifSubBlocks(raw, off);
+      if (skipped < 0) return false;
+      off = skipped;
+      continue;
+    }
+    if (introducer !== 0x2c) return false;
+    if (off + 10 > raw.length) return false;
+    const imagePacked = raw[off + 9]!;
+    off += 10;
+    if ((imagePacked & 0x80) !== 0) {
+      const tableBytes = (2 << (imagePacked & 7)) * 3;
+      if (off + tableBytes > raw.length) return false;
+      off += tableBytes;
+    }
+    if (off >= raw.length) return false;
+    off += 1;
+    const skipped = skipGifSubBlocks(raw, off);
+    if (skipped < 0) return false;
+    off = skipped;
+    images += 1;
+    if (images >= 2) return true;
+  }
+  return false;
+}
+
+/** Next offset after GIF data sub-blocks, or `-1` if the stream is truncated. */
+function skipGifSubBlocks(raw: Uint8Array, start: number): number {
+  let off = start;
+  while (off < raw.length) {
+    const size = raw[off]!;
+    off += 1;
+    if (size === 0) return off;
+    if (off + size > raw.length) return -1;
+    off += size;
+  }
+  return -1;
+}
+
 function decodeGif(raw: Uint8Array): RgbaImage | null {
   if (raw.length < 13) return null;
   if (!matchesAscii(raw, 0, "GIF8")) return null;
@@ -2375,6 +2438,10 @@ function fitInlineImageOrPassthrough(
   };
 
   if (raw.length + dimensions.width * dimensions.height * 4 > MAX_DECODE_HOLD_BYTES) {
+    return passthrough();
+  }
+
+  if (dimensions.format === "gif" && gifHasSecondImageDescriptor(raw)) {
     return passthrough();
   }
 

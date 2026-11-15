@@ -14,12 +14,13 @@ export interface MagpieOptionSchema {
   confirms?: Record<string, string>;
 }
 
-/** One provider option: its schema text, env override, and state key. */
+/** Every boolean field of `ProviderOptionsState`; the schemas own all of them. */
+type BooleanOptionKey = Exclude<keyof ProviderOptionsState, "cloakSaidAs">;
+
+/** One provider option: its schema text, env override, and fallback. */
 interface ProviderOptionSpec {
   /** Magpie / `package.json` option key, also passed to the live `option()` hook. */
   key: string;
-  /** The field this option lands on in `ProviderOptionsState`. */
-  stateKey: keyof ProviderOptionsState;
   envName: string;
   fallback: boolean;
   label: string;
@@ -52,11 +53,13 @@ function initialDefault(
 /**
  * The single source of truth for provider options: schema keys, env override
  * names, fallbacks, and the `ProviderOptionsState` field each one feeds.
+ *
+ * Keyed by state field so the mapped type requires one spec per boolean option,
+ * and declaration order is the order Magpie renders the switches.
  */
-const OPTION_SPECS: readonly ProviderOptionSpec[] = [
-  {
+const OPTION_SPECS: { readonly [K in BooleanOptionKey]: ProviderOptionSpec } = {
+  quotaRouting: {
     key: "quota_routing",
-    stateKey: "quotaRouting",
     envName: "AGY_MAGPIE_QUOTA_ROUTING",
     fallback: true,
     label: "Quota-aware multi-account routing",
@@ -69,9 +72,8 @@ const OPTION_SPECS: readonly ProviderOptionSpec[] = [
       zh: "当某个账号的 5 小时或周配额耗尽时，让 Magpie 自动将后续请求路由到其他已登录账号。",
     },
   },
-  {
+  accountFailover: {
     key: "account_failover",
-    stateKey: "accountFailover",
     envName: "AGY_MAGPIE_ACCOUNT_FAILOVER",
     // Off by default. Magpie follows a `401`, `402`, `403` or `429` to the next
     // account of this provider, so one failed turn becomes a request from every
@@ -88,9 +90,8 @@ const OPTION_SPECS: readonly ProviderOptionSpec[] = [
       zh: "默认关闭。关闭时，配额、登录或策略导致的失败会原样返回，不会代你尝试其它账号。开启后 Magpie 可能用另一个已登录账号重答同一请求——厂商条款把自动轮换账号视为不受支持。",
     },
   },
-  {
+  cloakPrompts: {
     key: "cloak_prompts",
-    stateKey: "cloakPrompts",
     envName: "AGY_MAGPIE_CLOAK_PROMPTS",
     // On by default, like the standalone bridge for the same vendor: the lines this
     // rewrites are answered with a spent-quota refusal whatever quota is left, so a
@@ -109,9 +110,8 @@ const OPTION_SPECS: readonly ProviderOptionSpec[] = [
       zh: "默认开启。改写会被上游以配额耗尽为由拒答的第三方客户端标识句，使同一请求通过。这是绕过上游检查，条款可能视为不受支持；关闭后会原样发送。",
     },
   },
-  {
+  minimalAgent: {
     key: "minimal_agent",
-    stateKey: "minimalAgent",
     envName: "AGY_MAGPIE_MINIMAL_AGENT",
     fallback: false,
     label: "Minimal agent system prompt",
@@ -124,9 +124,8 @@ const OPTION_SPECS: readonly ProviderOptionSpec[] = [
       zh: "开启 excludeDefaultComponents 可再省约 1.6K 内置提示词 Token（从 1,991 降至 389），但上游请求形态与默认 agy 略有差异。",
     },
   },
-  {
+  exposeThinking: {
     key: "expose_thinking",
-    stateKey: "exposeThinking",
     envName: "AGY_MAGPIE_EXPOSE_THINKING",
     fallback: true,
     label: "Expose thought summaries",
@@ -139,12 +138,12 @@ const OPTION_SPECS: readonly ProviderOptionSpec[] = [
       zh: "将 Antigravity ACP 返回的思考摘要编码为 Anthropic thinking 内容块输出。",
     },
   },
-];
+};
 
 export function buildProviderOptionSchemas(
   pkgOptions?: Record<string, unknown>,
 ): MagpieOptionSchema[] {
-  return OPTION_SPECS.map((spec) => ({
+  return Object.values(OPTION_SPECS).map((spec) => ({
     key: spec.key,
     label: spec.label,
     description: spec.description,
@@ -176,24 +175,24 @@ export function readProviderOptions(
   pkgOptions?: Record<string, unknown>,
 ): ProviderOptionsState {
   const fromMagpie = pluginInput?.magpie?.options?.(PROVIDER_ID) ?? {};
-  const state: ProviderOptionsState = {
-    quotaRouting: false,
-    cloakPrompts: true,
-    minimalAgent: false,
-    exposeThinking: false,
-    cloakSaidAs: readSaidAs(pkgOptions),
-    accountFailover: false,
+  // Boolean fields come from `OPTION_SPECS` alone: seeding them as literals here
+  // duplicated each spec's `fallback`, and one copy (`exposeThinking: false`) had
+  // already drifted from it. Listing the keys keeps the return literal typed, so a
+  // new option fails to compile until it has a spec and a read.
+  const readBoolean = (stateKey: BooleanOptionKey): boolean => {
+    const spec = OPTION_SPECS[stateKey];
+    const live = pluginInput?.magpie?.option?.(PROVIDER_ID, spec.key);
+    if (typeof live === "boolean") return live;
+    if (typeof fromMagpie[spec.key] === "boolean") return fromMagpie[spec.key]!;
+    return initialDefault(spec.key, spec.envName, pkgOptions, spec.fallback);
   };
 
-  for (const spec of OPTION_SPECS) {
-    const live = pluginInput?.magpie?.option?.(PROVIDER_ID, spec.key);
-    ((state as unknown) as Record<string, unknown>)[spec.stateKey] =
-      typeof live === "boolean"
-        ? live
-        : typeof fromMagpie[spec.key] === "boolean"
-          ? fromMagpie[spec.key]!
-          : initialDefault(spec.key, spec.envName, pkgOptions, spec.fallback);
-  }
-
-  return state;
+  return {
+    quotaRouting: readBoolean("quotaRouting"),
+    accountFailover: readBoolean("accountFailover"),
+    cloakPrompts: readBoolean("cloakPrompts"),
+    minimalAgent: readBoolean("minimalAgent"),
+    exposeThinking: readBoolean("exposeThinking"),
+    cloakSaidAs: readSaidAs(pkgOptions),
+  };
 }

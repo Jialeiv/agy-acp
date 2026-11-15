@@ -936,7 +936,7 @@ export class SessionCoordinator {
       this.providerOptions,
     );
     const cloakSaidAs =
-      this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs;
+      options?.providerOptions?.cloakSaidAs ?? this.providerOptions?.cloakSaidAs;
     const effectiveSystem = buildEffectiveSystemText(
       req.system,
       req.workDir,

@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto"
 import { BridgeHttpError } from "../types"
 import type { NormalizedAnthropicRequest, NormalizedToolDef, ToolChoiceSpec } from "../types"
 import { fitInlineImage } from "../protocol/images"
-import { normalizeToolDefinitions } from "./schema/sanitizer"
+import { normalizeToolDefinitions, RESERVED_MCP_TOOL_NAMES } from "./schema/sanitizer"
 
 export interface ExposedToolCall {
   id: string // "toolu_" + 24 random hex chars
@@ -64,7 +64,7 @@ const TOOL_USE_ID_PREFIX = "toolu_"
 // 180.004 s). A parked call answers with a "still running" notice well before that
 // and lets the model ask for the result again, so the same tool execution keeps
 // running instead of being turned into a timeout the model has to write around.
-const RELAY_TOOL_NAME = "await_result"
+const RELAY_TOOL_NAME: (typeof RESERVED_MCP_TOOL_NAMES)[number] = "await_result"
 const DEFAULT_RELAY_AFTER_MS = 150_000
 const MAX_RELAY_WAITS = 20
 const MAX_STRANDED_RESULTS = 32

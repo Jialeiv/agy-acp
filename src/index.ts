@@ -160,7 +160,6 @@ async function AntigravityMagpiePlugin(
             ? 0
             : positiveInt(pkgOptions?.waitTimeoutMs),
         maxWaiters: positiveInt(pkgOptions?.maxWaiters),
-        installSignalHandlers: true,
       });
       const mcpServer = getSharedMcpServer();
       coordinator = new SessionCoordinator({

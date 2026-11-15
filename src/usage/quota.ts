@@ -8,6 +8,7 @@ import {
   redactSecrets,
 } from "../accounts/env";
 import { combineSignals } from "../accounts/auth";
+import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN_URL } from "../accounts/google-oauth";
 
 export class UsageError extends Error {
   constructor(message: string) {
@@ -35,10 +36,6 @@ export interface AccountUsageResult {
   error?: string;
 }
 
-const GOOGLE_CLIENT_ID =
-  "1071006060591-tmhssin2h21lcre235vtolojh4g403ep" + ".apps.googleusercontent.com";
-const GOOGLE_CLIENT_SECRET = ["GOCSPX", "K58FWR486LdLJ1mLB8sXC4z6qDAf"].join("-");
-const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CODE_ASSIST_LOAD_URL =
   "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const PLAN_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour (matches official antigravity TIERS_TTL)

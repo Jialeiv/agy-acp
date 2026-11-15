@@ -12,6 +12,14 @@ import {
   resolveIsolatedHomeDir,
   spawnAgy,
 } from "./env";
+import {
+  GOOGLE_AUTH_URL,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_SCOPES,
+  GOOGLE_TOKEN_URL,
+  GOOGLE_USERINFO_URL,
+} from "./google-oauth";
 
 const AGY_SIGN_IN_REQUIRED_RE = /please sign in|not (?:logged|signed) in|login required/i;
 
@@ -22,24 +30,6 @@ const AGY_ACCOUNT_NAMESPACE_BYTES = Buffer.from(
   "8e9a4f62b7c14d3ea5109c2b84e17d39",
   "hex"
 );
-
-// Antigravity's official installed-app Google OAuth client (same client ID & scopes
-// used by `agy acp --login` and `@magpie-community/opencode-antigravity-auth`).
-const GOOGLE_CLIENT_ID =
-  "1071006060591-tmhssin2h21lcre235vtolojh4g403ep" + ".apps.googleusercontent.com";
-const GOOGLE_CLIENT_SECRET = ["GOCSPX", "K58FWR486LdLJ1mLB8sXC4z6qDAf"].join("-");
-const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/cloud-platform",
-  "https://www.googleapis.com/auth/userinfo.email",
-  "https://www.googleapis.com/auth/userinfo.profile",
-  "https://www.googleapis.com/auth/cclog",
-  "https://www.googleapis.com/auth/experimentsandconfigs",
-  "https://www.googleapis.com/auth/aicode",
-  "openid",
-];
-const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
-const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo?alt=json";
 
 const BROWSER_SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
 const LISTENER_MAX_LIFETIME_MS = BROWSER_SIGN_IN_TIMEOUT_MS + 30_000;
@@ -352,17 +342,19 @@ export function extractAuthorizationCode(rawInput: string): string {
   }
 
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    let parsed: URL;
     try {
-      const parsed = new URL(trimmed);
-      const code = parsed.searchParams.get("code");
-      if (code && code.trim()) {
-        return code.trim();
-      }
-      throw new Error("No authorization code found in URL");
-    } catch (err: any) {
-      if (err.message.includes("No authorization code")) throw err;
-      throw new Error(`Invalid callback URL: ${err.message}`);
+      parsed = new URL(trimmed);
+    } catch {
+      // Never interpolate the parse error or the input: both can contain the
+      // authorization code, and this message reaches the host UI and logs.
+      throw new Error("Invalid callback URL: not a parseable URL");
     }
+    const code = parsed.searchParams.get("code");
+    if (code && code.trim()) {
+      return code.trim();
+    }
+    throw new Error("No authorization code found in URL");
   }
 
   return trimmed;
@@ -1878,7 +1870,10 @@ export function createAuthMethods(deps?: AuthRuntimeDeps) {
             } catch (err: any) {
               killProcessTree(child);
               rollbackIsolatedDir();
-              return { type: "failed", error: err?.message ?? String(err) };
+              return {
+                type: "failed",
+                error: redactSecrets(err?.message ?? String(err)),
+              };
             }
 
             const waitExit = new Promise<number | null>((resolve, reject) => {

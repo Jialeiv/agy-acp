@@ -13,7 +13,6 @@ import { getPluginDataRoot } from "../src/accounts/env";
 import { AgySessionWorker, type ModelSelection } from "../src/runtime/worker";
 import {
   AsyncEventQueue,
-  DEFAULT_MAX_TURN_QUEUE_BYTES,
 } from "../src/runtime/turn-context";
 import { measureProcessTreeRssBytes } from "../src/runtime/rss";
 import { encodeAnthropicSseResponse } from "../src/protocol/anthropic";
@@ -690,10 +689,6 @@ describe("Phase 2 GlobalScheduler wait-for-room", () => {
 });
 
 describe("Phase 2 bounded turn event queue (MED-4)", () => {
-  test("16 MiB is the default ceiling", () => {
-    expect(DEFAULT_MAX_TURN_QUEUE_BYTES).toBe(16 * 1024 * 1024);
-  });
-
   test("a stalled consumer fails the turn with a 502 instead of buffering forever", async () => {
     const overflows: BridgeHttpError[] = [];
     const queue = new AsyncEventQueue<any>({

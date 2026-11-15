@@ -257,10 +257,12 @@ export function buildAgyEnvAndArgs(
     if (pathValues.length > 0) env.PATH = pathValues[0];
   }
 
-  // Browser suppression & auto-update
+  // Browser suppression & auto-update. The auto-update switch is a hard rule:
+  // an inherited value (empty, `false`, `0`) must not re-enable the updater,
+  // which would rewrite the binary underneath long-lived worker processes.
   env.PATH = `${shimDir}${path.delimiter}${env.PATH ?? HOST_PATH}`;
   env.BROWSER = "/usr/bin/false";
-  env.AGY_CLI_DISABLE_AUTO_UPDATE = process.env.AGY_CLI_DISABLE_AUTO_UPDATE ?? "true";
+  env.AGY_CLI_DISABLE_AUTO_UPDATE = "true";
 
   const finalArgs = [...args];
   let cwd: string;
@@ -398,7 +400,11 @@ function collectUnixDescendantsBottomUp(rootPid: number): number[] {
  */
 export function killProcessTree(child: ChildProcess, signal: NodeJS.Signals = "SIGKILL"): void {
   if (!child || !child.pid) return;
-  if (child.exitCode !== null && child.signalCode !== null) return;
+  // A process reports an exit code (normal exit) or a signal code (killed by a
+  // signal), never both, so `&&` never held and cleanup ran for reaped children
+  // too. Their descendants have been reparented, so the only thing a pid scan
+  // can still find is an unrelated process that reused the pid.
+  if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
     try {
       spawnSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], {

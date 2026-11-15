@@ -11,6 +11,14 @@ export interface GlobalSchedulerOptions {
   waitTimeoutMs?: number;
   /** Cap on parked admission requests; beyond it the request fails fast. */
   maxWaiters?: number;
+  /**
+   * Standalone process ownership: after synchronous worker teardown, call
+   * `process.exit` on SIGINT/SIGTERM. Embedded Magpie/OpenCode plugins must leave
+   * this off. Cooperative signal handlers still run either way: they reap
+   * workers immediately, then either defer to an existing host listener or
+   * re-raise the signal so default termination is restored. Destroying the last
+   * scheduler removes those listeners.
+   */
   installSignalHandlers?: boolean;
 }
 
@@ -64,33 +72,85 @@ function envPositiveInt(name: string): number | undefined {
 }
 
 const globalActiveSchedulers = new Set<GlobalScheduler>();
-let globalSignalsInstalled = false;
+/** Schedulers that asked to own SIGINT/SIGTERM and terminate the process. */
+const processOwningSchedulers = new Set<GlobalScheduler>();
+let processExitHookInstalled = false;
+let cooperativeSignalsInstalled = false;
+let cooperativeSignalDepth = 0;
 
-function installGlobalSignalHandlersOnce(): void {
-  if (globalSignalsInstalled) return;
-  globalSignalsInstalled = true;
+function closeAllActiveSchedulersSync(reason: string): void {
+  for (const s of Array.from(globalActiveSchedulers)) {
+    s.closeAllSync(reason);
+  }
+}
 
+function ensureProcessExitHook(): void {
+  if (processExitHookInstalled) return;
+  processExitHookInstalled = true;
   process.once("exit", () => {
-    for (const s of Array.from(globalActiveSchedulers)) {
-      s.closeAllSync("process_exit");
+    closeAllActiveSchedulersSync("process_exit");
+  });
+}
+
+function hostHasOtherSignalListeners(
+  signal: NodeJS.Signals,
+  ours: (...args: unknown[]) => void,
+): boolean {
+  return process.listeners(signal).some((listener) => listener !== ours);
+}
+
+function handleCooperativeSignal(
+  signal: "SIGINT" | "SIGTERM",
+  ours: () => void,
+  standaloneExitCode: number,
+): void {
+  // Re-entrancy only: a re-raised signal must not loop. A later SIGINT/SIGTERM
+  // after a one-shot host listener has finished still needs to reap/re-raise.
+  if (cooperativeSignalDepth > 0) return;
+  cooperativeSignalDepth++;
+  try {
+    // Snapshot before closeAll / host `once` callbacks: we prepend so this runs
+    // first, while a pre-existing `process.once` listener is still listed.
+    const hostOwnsTermination = hostHasOtherSignalListeners(signal, ours);
+    closeAllActiveSchedulersSync(signal);
+    if (processOwningSchedulers.size > 0) {
+      process.exit(standaloneExitCode);
+      return;
     }
-  });
+    if (hostOwnsTermination) {
+      // Host owns termination. Workers are already reaped.
+      return;
+    }
+    // Restore default termination: a listener suppresses Bun/Node's SIGINT/SIGTERM
+    // exit, and that default path does not run `process` "exit" hooks.
+    process.removeListener(signal, ours);
+    process.kill(process.pid, signal);
+  } finally {
+    cooperativeSignalDepth--;
+  }
+}
 
-  process.once("SIGINT", () => {
-    void Promise.allSettled(
-      Array.from(globalActiveSchedulers).map((s) => s.closeAll("SIGINT")),
-    ).finally(() => {
-      process.exit(130);
-    });
-  });
+function onCooperativeSigint(): void {
+  handleCooperativeSignal("SIGINT", onCooperativeSigint, 130);
+}
 
-  process.once("SIGTERM", () => {
-    void Promise.allSettled(
-      Array.from(globalActiveSchedulers).map((s) => s.closeAll("SIGTERM")),
-    ).finally(() => {
-      process.exit(143);
-    });
-  });
+function onCooperativeSigterm(): void {
+  handleCooperativeSignal("SIGTERM", onCooperativeSigterm, 143);
+}
+
+function installCooperativeSignals(): void {
+  if (cooperativeSignalsInstalled) return;
+  cooperativeSignalsInstalled = true;
+  process.prependListener("SIGINT", onCooperativeSigint);
+  process.prependListener("SIGTERM", onCooperativeSigterm);
+}
+
+function uninstallCooperativeSignalsIfIdle(): void {
+  if (!cooperativeSignalsInstalled) return;
+  if (globalActiveSchedulers.size > 0) return;
+  process.removeListener("SIGINT", onCooperativeSigint);
+  process.removeListener("SIGTERM", onCooperativeSigterm);
+  cooperativeSignalsInstalled = false;
 }
 
 export class GlobalScheduler {
@@ -146,9 +206,15 @@ export class GlobalScheduler {
       this.reaperTimer.unref();
     }
 
+    // Every scheduler joins the process-exit sweep *and* the cooperative
+    // SIGINT/SIGTERM handlers. Default SIGTERM does not run `exit` hooks, so
+    // workers must be reaped from the signal itself. `process.exit` after that
+    // is opt-in standalone ownership only.
+    globalActiveSchedulers.add(this);
+    ensureProcessExitHook();
+    installCooperativeSignals();
     if (options?.installSignalHandlers) {
-      globalActiveSchedulers.add(this);
-      installGlobalSignalHandlersOnce();
+      processOwningSchedulers.add(this);
     }
   }
 
@@ -522,5 +588,7 @@ export class GlobalScheduler {
       this.reaperTimer = undefined;
     }
     globalActiveSchedulers.delete(this);
+    processOwningSchedulers.delete(this);
+    uninstallCooperativeSignalsIfIdle();
   }
 }

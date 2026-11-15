@@ -11,12 +11,16 @@
 #   needs no secret (`npx npm@latest trust github magpie-agy-acp --file
 #   release.yml --repo sidkang/agy-acp --allow-publish
 #   --registry=https://registry.npmjs.org/ -y`), and a granular `NPM_TOKEN`
-#   secret is the fallback. While neither exists the npm job reports that on the
-#   run's summary and the tag's GitHub release still ships, so a tag is never
-#   half-done.
+#   secret is the fallback. npm publishing is attempted by default and every
+#   publish failure is fatal. Set the repository Actions variable
+#   SKIP_NPM_PUBLISH=true to ship only the GitHub release.
 #
 # Every check `ci` runs runs again here against the tagged commit, and the tag
 # must name the version in package.json (`scripts/check-release.mjs --tag`).
+#
+# The archive is always packed into and selected from a dedicated directory.
+# Never select it with a repository-root glob: a checkout may contain unrelated
+# archives, and passing more than one to npm or gh changes their behavior.
 name: release
 
 on:
@@ -76,7 +80,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: bun install --frozen-lockfile || bun install
+      - run: bun install --frozen-lockfile
       - name: typecheck
         run: HOME=$(mktemp -d) bun x tsc --noEmit
       - name: test
@@ -91,11 +95,33 @@ jobs:
             HOME=$(mktemp -d) bun scripts/check-release.mjs
           fi
       - name: pack
-        run: npm pack --ignore-scripts
+        id: pack
+        run: |
+          set -euo pipefail
+          pack_dir="${RUNNER_TEMP}/npm-tarball"
+          rm -rf "$pack_dir"
+          mkdir -p "$pack_dir"
+          npm pack --ignore-scripts --json --pack-destination "$pack_dir" > "${RUNNER_TEMP}/npm-pack.json"
+          packed_name="$(
+            node -e '
+              const fs = require("node:fs");
+              const entries = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              if (!Array.isArray(entries) || entries.length !== 1 || typeof entries[0].filename !== "string") {
+                throw new Error("npm pack must report exactly one archive");
+              }
+              process.stdout.write(entries[0].filename);
+            ' "${RUNNER_TEMP}/npm-pack.json"
+          )"
+          tarball="$(bash scripts/release-artifact.sh "$pack_dir")"
+          if [ "$(basename "$tarball")" != "$packed_name" ]; then
+            echo "::error::npm pack reported ${packed_name}, but the pack directory contains ${tarball}" >&2
+            exit 1
+          fi
+          echo "tarball_path=${tarball}" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: npm-tarball
-          path: magpie-agy-acp-*.tgz
+          path: ${{ steps.pack.outputs.tarball_path }}
           if-no-files-found: error
 
   github-release:
@@ -111,14 +137,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: npm-tarball
+          path: ${{ runner.temp }}/release-artifact
+      - name: resolve release artifact
+        id: artifact
+        run: |
+          set -euo pipefail
+          echo "path=$(bash scripts/release-artifact.sh "${RUNNER_TEMP}/release-artifact")" >> "$GITHUB_OUTPUT"
       - name: release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.verify.outputs.release_tag }}
+          ARTIFACT_PATH: ${{ steps.artifact.outputs.path }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 \
-            && gh release upload "$TAG" magpie-agy-acp-*.tgz --clobber \
-            || gh release create "$TAG" magpie-agy-acp-*.tgz --generate-notes --title "$TAG"
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ARTIFACT_PATH" --clobber
+          else
+            gh release create "$TAG" "$ARTIFACT_PATH" --generate-notes --title "$TAG"
+          fi
 
   npm-publish:
     needs: verify
@@ -128,6 +164,9 @@ jobs:
       id-token: write # npm's OIDC trusted-publishing exchange
       contents: read
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ needs.verify.outputs.release_tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24 # npm 11.5+, which speaks trusted publishing
@@ -135,34 +174,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: npm-tarball
+          path: ${{ runner.temp }}/release-artifact
+      - name: resolve release artifact
+        id: artifact
+        run: |
+          set -euo pipefail
+          echo "path=$(bash scripts/release-artifact.sh "${RUNNER_TEMP}/release-artifact")" >> "$GITHUB_OUTPUT"
       - name: publish
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set +e
-          if [ -n "$NPM_TOKEN" ]; then
-            NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish magpie-agy-acp-*.tgz --access public --provenance
-            status=$?
-          else
-            npm publish magpie-agy-acp-*.tgz --access public --provenance
-            status=$?
-          fi
-          if [ $status -ne 0 ]; then
-            {
-              echo "### npm publish did not run"
-              echo
-              echo "The tag's GitHub release attached \`magpie-agy-acp-*.tgz\`"
-              echo "(\`magpie plugin add github:sidkang/agy-acp\` installs from the"
-              echo "repository default branch). To also publish \`magpie-agy-acp\`"
-              echo "on npm, either name this workflow as the package's Trusted"
-              echo "Publisher:"
-              echo
-              echo '```sh'
-              echo "npx npm@latest trust github magpie-agy-acp --file release.yml --repo sidkang/agy-acp --allow-publish --registry=https://registry.npmjs.org/ -y"
-              echo '```'
-              echo
-              echo "or add a granular \`NPM_TOKEN\` repository secret."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "npm publish was skipped or refused (exit $status); the GitHub release is unaffected."
-            exit 0
-          fi
+          SKIP_NPM_PUBLISH: ${{ vars.SKIP_NPM_PUBLISH }}
+          ARTIFACT_PATH: ${{ steps.artifact.outputs.path }}
+        run: bash scripts/npm-publish.sh "$ARTIFACT_PATH"
