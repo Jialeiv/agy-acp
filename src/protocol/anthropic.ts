@@ -1783,7 +1783,9 @@ async function* untilAborted<T>(
         yield step.value;
       }
     } finally {
-      void iterator.return?.();
+      // Awaited: the runtime's own `finally` retires the worker, and a caller that
+      // asserts the retirement right after this response must see it done.
+      await iterator.return?.();
     }
   }
   const aborted = new Promise<"aborted">((resolve) => {
@@ -1801,7 +1803,7 @@ async function* untilAborted<T>(
       yield step.value;
     }
   } finally {
-    void iterator.return?.();
+    await iterator.return?.();
   }
 }
 
