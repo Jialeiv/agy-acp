@@ -2082,6 +2082,15 @@ describe("collectAnthropicJsonResponse", () => {
     expect(second.status).toBe(499);
   });
 
+  test("a streamed turn that ended before its first event answers 409 too", async () => {
+    const response = await encodeAnthropicSseResponse(MODEL, streamOf([]));
+    expect(response.status).toBe(409);
+    const body: any = await readJson(response);
+    expect(String(body.error.message)).toContain(
+      "stopped before it answered this turn",
+    );
+  });
+
   test("a caller that already went away is answered 499, as the streaming path does", async () => {
     const controller = new AbortController();
     controller.abort();

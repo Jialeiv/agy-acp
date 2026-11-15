@@ -278,9 +278,10 @@ answer: a model writing it after prose is quoting it.
 
 - The runtime settles a cancelled native turn without a `finish` event
   (`src/runtime/worker.ts`, `handlePromptSuccess`: a `cancelled` result closes the queue instead
-  of finishing it). A non-streaming request for that turn now answers `409` with "The agent
-  stopped before it answered this turn"; a caller that had already gone away gets `499`, which is
-  what the streaming path answers for the same case (`src/protocol/anthropic.ts`).
+  of finishing it). Such a turn answers `409` with "The agent stopped before it answered this
+  turn" on both paths: the non-streaming encoder after the loop, and a streamed request whose
+  stream ends before its first event (`src/protocol/anthropic.ts`, `PeekedTurnSource`). A caller
+  that had already gone away gets `499` on either path.
 - Why `409` and not `200` with an empty text block: since 2026-11-15 Magpie reads a group member's
   reply that ends having said nothing as no answer and asks the next member for it
   (`c0cf352a8`, `eventEmptyEnd` / `holdWriter.emptyFails`, a `502` nobody rests). An empty `200`

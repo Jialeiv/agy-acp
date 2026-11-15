@@ -1094,7 +1094,11 @@ export function jsonErrorResponse(err: unknown): Response {
 // SSE encoding
 // ---------------------------------------------------------------------------
 
-type PeekOutcome = { kind: "error"; error: unknown } | { kind: "events" };
+type PeekOutcome =
+  | { kind: "error"; error: unknown }
+  | { kind: "events" }
+  /** The turn ended before it produced anything: no bytes have gone out yet. */
+  | { kind: "empty" };
 
 /** Maps one terminal `error` event onto the bridge error it represents. */
 function bridgeErrorFromEvent(
@@ -1193,9 +1197,13 @@ class PeekedTurnSource {
   async peekFirst(): Promise<PeekOutcome> {
     try {
       for (;;) {
-        if (this.closed) return { kind: "events" };
+        if (this.closed) {
+          return this.peeked.length === 0 ? { kind: "empty" } : { kind: "events" };
+        }
         const result = await this.iterator.next();
-        if (result.done === true) return { kind: "events" };
+        if (result.done === true) {
+          return this.peeked.length === 0 ? { kind: "empty" } : { kind: "events" };
+        }
         const event = result.value;
         if (event.type === "error") {
           // Pre-stream failure: surface the real status, not a 200 SSE stream.
@@ -1744,6 +1752,15 @@ export async function encodeAnthropicSseResponse(
   if (outcome.kind === "error") {
     await source.close();
     return jsonErrorResponse(outcome.error);
+  }
+  if (outcome.kind === "empty") {
+    // A cancelled turn before its first event. No bytes have gone out, so the
+    // status can still say the truth: an empty `200` stream is what Magpie reads
+    // as a member that answered nothing, and it asks the next member for it.
+    await source.close();
+    return jsonErrorResponse(
+      new BridgeHttpError(409, "invalid_request_error", TURN_INCOMPLETE_MESSAGE),
+    );
   }
 
   return createSseResponse(model, source, signal, onBodyCancel);
