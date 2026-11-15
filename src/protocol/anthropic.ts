@@ -1762,6 +1762,49 @@ export async function encodeAnthropicSseResponse(
 const TURN_INCOMPLETE_MESSAGE =
   "The agent stopped before it answered this turn.";
 
+/**
+ * Ends the iteration as soon as the caller abandons the request.
+ *
+ * Without it a turn whose events never arrive keeps the loop blocked in `next()`
+ * after the signal fired, so the after-loop check never runs and the handler
+ * outlives its caller. Closing the iterator also runs the runtime's own `finally`,
+ * which releases the worker the turn was holding.
+ */
+async function* untilAborted<T>(
+  events: AsyncIterable<T>,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<T> {
+  const iterator = events[Symbol.asyncIterator]();
+  if (!signal) {
+    try {
+      for (;;) {
+        const step = await iterator.next();
+        if (step.done === true) return;
+        yield step.value;
+      }
+    } finally {
+      void iterator.return?.();
+    }
+  }
+  const aborted = new Promise<"aborted">((resolve) => {
+    if (signal.aborted) {
+      resolve("aborted");
+      return;
+    }
+    signal.addEventListener("abort", () => resolve("aborted"), { once: true });
+  });
+  try {
+    for (;;) {
+      const step = await Promise.race([iterator.next(), aborted]);
+      if (step === "aborted") return;
+      if (step.done === true) return;
+      yield step.value;
+    }
+  } finally {
+    void iterator.return?.();
+  }
+}
+
 type JsonContentBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string; signature: string }
@@ -1785,7 +1828,7 @@ export async function collectAnthropicJsonResponse(
   let lastThinking: ThinkingBlock | null = null;
 
   try {
-    for await (const event of events) {
+    for await (const event of untilAborted(events, signal)) {
       if (signal?.aborted === true) break;
 
       switch (event.type) {

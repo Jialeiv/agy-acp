@@ -830,6 +830,27 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
         sessionKey: persistedKey,
       }),
     ).not.toBeNull();
+
+    // The secondary content-hash lookup (a client that rotated its session id) is
+    // fenced too, so a rotated id cannot adopt a ledger opened under other rewrites.
+    store.park(
+      key,
+      makeSnapshot({ outgoingSystemDigest: "digest-1", committedMessages: parkedMessages }),
+      now,
+    );
+    const rotated = {
+      ...params("digest-1"),
+      req: makeReq(req.messages, {
+        sessionId: "rotated-id",
+        system: "system instructions",
+        workDir: "/tmp/proj",
+      }),
+      sessionKey: `${acct.slotKey}::${acct.accountRef}::rotated-id`,
+    };
+    expect(store.resolveResume({ ...rotated, outgoingSystemDigest: "digest-2" })).toBeNull();
+    const adopted = store.resolveResume(rotated);
+    expect(adopted).not.toBeNull();
+    expect(adopted?.viaSecondaryHash).toBe(true);
   });
 
   test("MED-10: 4 concurrent OS processes preserve all writes, cross-host sees invalidation, reclaims stale lock", async () => {

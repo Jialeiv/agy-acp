@@ -2049,6 +2049,24 @@ describe("collectAnthropicJsonResponse", () => {
     );
   });
 
+  test("a stalled turn the caller abandons answers 499 without waiting for it", async () => {
+    // The events never arrive: without racing the signal, the loop stays blocked in
+    // `next()` and the handler outlives the caller.
+    const controller = new AbortController();
+    const stalled: AsyncIterable<any> = {
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+    };
+    setTimeout(() => controller.abort(), 20);
+    const started = Date.now();
+    const response = await collectAnthropicJsonResponse(
+      MODEL,
+      stalled,
+      controller.signal,
+    );
+    expect(response.status).toBe(499);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   test("a caller that already went away is answered 499, as the streaming path does", async () => {
     const controller = new AbortController();
     controller.abort();

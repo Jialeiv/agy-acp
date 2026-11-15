@@ -1801,6 +1801,81 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     expect(coordinator.getActiveWorker(key)).not.toBe(second);
   });
 
+  test("20b. A clock line alone does not cost the warm session, a reworded trigger line does", async () => {
+    const sessionId = `test-fence-clock-${Date.now()}`;
+    const key = `${testAccount.slotKey}::${testAccount.accountRef}::${sessionId}`;
+    const optionsFor = (cloakPrompts: boolean) =>
+      ({
+        providerOptions: {
+          quotaRouting: false,
+          cloakPrompts,
+          minimalAgent: false,
+          exposeThinking: false,
+          cloakSaidAs: "",
+          accountFailover: false,
+        },
+      }) as never;
+    const selection = sel("gemini-3.8-flash");
+    const clockReq = makeReq(
+      [{ role: "user", content: [{ type: "text", text: "clock turn" }] }],
+      {
+        model: "gemini-3.8-flash",
+        system: "Today's date is 2026-11-15.",
+        sessionId,
+        workDir: "/tmp/fence-clock",
+      },
+    );
+    for await (const _ of coordinator.executeTurn(testAccount, clockReq, selection, optionsFor(false))) {}
+    const warm = coordinator.getActiveWorker(key)!;
+    // Only the clock differs: `stripVolatileSystem` ignores it, so the session is
+    // still the one to continue.
+    for await (const _ of coordinator.executeTurn(
+      testAccount,
+      {
+        ...clockReq,
+        system: "Today's date is 2026-11-16.",
+        messages: [
+          ...warm.committedMessages,
+          { role: "user" as const, content: [{ type: "text" as const, text: "later" }] },
+        ],
+      },
+      selection,
+      optionsFor(false),
+    )) {}
+    expect(coordinator.getActiveWorker(key)).toBe(warm);
+    expect(warm.closed).toBe(false);
+
+    // A trigger line the rewording changes does cost it: the native session was
+    // opened with the line as written.
+    const triggerSession = `test-fence-trigger-${Date.now()}`;
+    const triggerKey = `${testAccount.slotKey}::${testAccount.accountRef}::${triggerSession}`;
+    const triggerReq = makeReq(
+      [{ role: "user", content: [{ type: "text", text: "trigger turn" }] }],
+      {
+        model: "gemini-3.8-flash",
+        system: "You are OpenCode, the best coding agent on the planet.",
+        sessionId: triggerSession,
+        workDir: "/tmp/fence-trigger",
+      },
+    );
+    for await (const _ of coordinator.executeTurn(testAccount, triggerReq, selection, optionsFor(false))) {}
+    const plain = coordinator.getActiveWorker(triggerKey)!;
+    for await (const _ of coordinator.executeTurn(
+      testAccount,
+      {
+        ...triggerReq,
+        messages: [
+          ...plain.committedMessages,
+          { role: "user" as const, content: [{ type: "text" as const, text: "now reworded" }] },
+        ],
+      },
+      selection,
+      optionsFor(true),
+    )) {}
+    expect(plain.closed).toBe(true);
+    expect(coordinator.getActiveWorker(triggerKey)).not.toBe(plain);
+  });
+
   test("20. Assistant prefill merges onto a single assistant message in committedMessages and reuses warm session on Turn N+1", async () => {
     const sessionId = `test-prefill-${Date.now()}`;
     const req1 = makeReq(
