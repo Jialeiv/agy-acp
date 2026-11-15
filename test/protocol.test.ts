@@ -2027,6 +2027,41 @@ describe("collectAnthropicJsonResponse", () => {
     expect(body.stop_reason).toBe("end_turn");
   });
 
+  test("a turn that never said it finished answers 409, not an empty 200", async () => {
+    // A cancelled native turn closes its event stream without a `finish`. An empty
+    // `200` reads to Magpie as a member that answered nothing at all, which a group
+    // asks the next member for; `409` is in no branch of `retryable()`, so the turn
+    // stops here and the user sees why.
+    const response = await collectAnthropicJsonResponse(
+      MODEL,
+      streamOf([{ type: "text_delta", text: "partial" }]),
+    );
+    expect(response.status).toBe(409);
+    const body: any = await readJson(response);
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("invalid_request_error");
+    expect(String(body.error.message)).toContain(
+      "stopped before it answered this turn",
+    );
+    // None of the four vocabularies Magpie routes on may appear in that body.
+    expect(JSON.stringify(body)).not.toMatch(
+      /quota|credit|balance|billing|insufficient|region|unapproved channel|illegal api invocation/i,
+    );
+  });
+
+  test("a caller that already went away is answered 499, as the streaming path does", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const response = await collectAnthropicJsonResponse(
+      MODEL,
+      streamOf([{ type: "finish", stopReason: "end_turn", usage: USAGE }]),
+      controller.signal,
+    );
+    expect(response.status).toBe(499);
+    const body: any = await readJson(response);
+    expect(String(body.error.message)).toContain("Client closed request");
+  });
+
   test("thinking blocks without a signature get a UUID-shaped one", async () => {
     const response = await collectAnthropicJsonResponse(
       MODEL,

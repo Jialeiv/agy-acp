@@ -1067,6 +1067,37 @@ describe("AgySessionWorker diagnostics integration", () => {
     }
   });
 
+  test("a native cancel closes the turn's queue instead of leaving it waiting", async () => {
+    // `agy` can settle a prompt as cancelled without the caller having aborted (a
+    // steer race, a watchdog inside the CLI). Nothing answers such a turn, and the
+    // caller used to wait for an event that never came.
+    const ws = makeTempDir("worker-cancel-queue-");
+    const worker = new AgySessionWorker(account, "diag-sess-cancel-queue", mcpServer, {
+      workspaceDir: ws,
+      spawnFn: () =>
+        createScriptedFakeAcpChild(ws, (ctx) => {
+          ctx.cancelTurn();
+        }),
+    });
+
+    try {
+      await worker.start();
+      const events = await Promise.race([
+        runTurn(worker, "cancel me"),
+        new Promise<TurnStreamEvent[]>((resolve) =>
+          setTimeout(() => resolve([{ type: "text_delta", text: "TIMED_OUT" }]), 3000),
+        ),
+      ]);
+      expect(events.some((e) => e.type === "text_delta" && e.text === "TIMED_OUT")).toBe(
+        false,
+      );
+      // No answer, and no `finish`: the encoder above is what turns that into 409.
+      expect(events.some((e) => e.type === "finish")).toBe(false);
+    } finally {
+      await worker.close("test_done");
+    }
+  });
+
   test("a rejected prompt nothing reached the caller from is asked again", async () => {
     const ws = makeTempDir("worker-thin-retry-");
     let prompts = 0;

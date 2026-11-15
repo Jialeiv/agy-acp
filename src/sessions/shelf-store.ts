@@ -26,7 +26,6 @@ import {
   type NormalizedAnthropicRequest,
   type NormalizedMessage,
 } from "../types";
-import { stripVolatileSystem } from "../protocol/cloak";
 import { getPluginDataRoot, isPidAlive } from "../accounts/env";
 import { resolveConversationDbPath } from "../usage/step-usage";
 import {
@@ -41,7 +40,6 @@ import {
   matchPersistedPrefix,
   normalizePersistedEntry,
   normalizeWorkDir,
-  sha256Hex,
   subagentIdFromSessionKey,
   systemPromptsMatch,
   toolsMatchPersistedDigests,
@@ -84,6 +82,8 @@ export interface WorkerParkSnapshot {
   minimalAgent: boolean;
   workDir?: string;
   systemPrompt?: string;
+  /** `worker.outgoingSystemDigest`: what this session was opened with. */
+  outgoingSystemDigest: string;
   /** `worker.appliedSystemHistorySeed`: present means the ledger cannot be indexed. */
   appliedSystemHistorySeed?: string;
   registeredTools: ToolDefLike[];
@@ -99,6 +99,8 @@ export interface ParkedSession {
   subagentId?: string;
   committedMessages: NormalizedMessage[];
   systemPrompt?: string;
+  /** What the session was opened with; a resume must match it. */
+  outgoingSystemDigest: string;
   systemHistorySeed?: string;
   minimalAgent: boolean;
   registeredTools: ToolDefLike[];
@@ -137,6 +139,12 @@ export interface ResolveShelfResumeParams {
   req: NormalizedAnthropicRequest;
   /** Exact key the caller would use for this session (`slot::account::session[::sub:…]`). */
   sessionKey: string;
+  /**
+   * `outgoingSystemDigest` of the text this request would open a session with. A
+   * parked session opened under different rewrites or notes answers under the old
+   * prompt, so it is not resumed.
+   */
+  outgoingSystemDigest: string;
   requestedMinimalAgent: boolean;
   now?: number;
   /** False for the real `agy` runtime, which must also see the `.db` on disk. */
@@ -602,7 +610,8 @@ export class ShelfStore {
       minimalAgent: snapshot.minimalAgent,
       workDir: snapshot.workDir,
       parkedAt: now,
-      systemPromptDigest: sha256Hex(stripVolatileSystem(snapshot.systemPrompt ?? "")),
+      // The *outgoing* identity, not the client's text: see `outgoingSystemDigest`.
+      systemPromptDigest: snapshot.outgoingSystemDigest,
       toolsDigests: digestToolsForPersistence(snapshot.registeredTools),
       messageDigests: digestMessagesForPersistence(snapshot.committedMessages),
       heardRuns: heardRuns(snapshot.committedMessages, true),
@@ -650,6 +659,7 @@ export class ShelfStore {
           accountRef: snapshot.accountRef,
           committedMessages: [...snapshot.committedMessages],
           systemPrompt: snapshot.systemPrompt,
+          outgoingSystemDigest: snapshot.outgoingSystemDigest,
           systemHistorySeed: snapshot.appliedSystemHistorySeed,
           minimalAgent: snapshot.minimalAgent,
           registeredTools: [...snapshot.registeredTools],
@@ -992,6 +1002,7 @@ export class ShelfStore {
     if (this.reservedNativeIds.has(entry.nativeSessionId)) return null;
     if (!this.entryIdentityAllows(entry, params, false, "ignore")) return null;
     if (!systemPromptsMatch(entry.systemPrompt, req.system)) return null;
+    if (entry.outgoingSystemDigest !== params.outgoingSystemDigest) return null;
     if (!isToolSetCompatible(entry.registeredTools, req.tools)) return null;
     const match = matchLedgerPrefix(entry.committedMessages, req.messages);
     return match.matched ? match : null;
@@ -1008,7 +1019,7 @@ export class ShelfStore {
     // A `0.1.4` entry carries neither slot nor subagent tag; at its exact key it
     // still belongs to this session, so a missing value is tolerated.
     if (!this.entryIdentityAllows(entry, params, false, "conflict")) return null;
-    if (entry.systemPromptDigest !== sha256Hex(stripVolatileSystem(req.system))) {
+    if (entry.systemPromptDigest !== params.outgoingSystemDigest) {
       return null;
     }
     if (!toolsMatchPersistedDigests(entry.toolsDigests, req.tools)) return null;
@@ -1078,6 +1089,7 @@ export class ShelfStore {
           return null;
         }
         if (!systemPromptsMatch(entry.systemPrompt, req.system)) return null;
+        if (entry.outgoingSystemDigest !== params.outgoingSystemDigest) return null;
         if (!isToolSetCompatible(entry.registeredTools, req.tools)) return null;
         if (entry.committedMessages.length < 2) return null;
         const match = matchLedgerPrefix(entry.committedMessages, req.messages);
@@ -1100,7 +1112,7 @@ export class ShelfStore {
     now: number,
   ): ResolvedShelfResume | null {
     const { req } = params;
-    const expectedPromptDigest = sha256Hex(stripVolatileSystem(req.system));
+    const expectedPromptDigest = params.outgoingSystemDigest;
     const best = this.bestCandidate(
       this.persistedSessions,
       params,

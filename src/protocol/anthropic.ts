@@ -1753,6 +1753,15 @@ export async function encodeAnthropicSseResponse(
 // Non-streaming JSON encoding
 // ---------------------------------------------------------------------------
 
+/**
+ * What a non-streaming turn that stopped without finishing is told.
+ *
+ * It must carry none of Magpie's routing vocabulary: no limit words, no credit
+ * words, no `refusedWords`, no region sentence. The status does the routing work.
+ */
+const TURN_INCOMPLETE_MESSAGE =
+  "The agent stopped before it answered this turn.";
+
 type JsonContentBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string; signature: string }
@@ -1765,6 +1774,9 @@ export async function collectAnthropicJsonResponse(
 ): Promise<Response> {
   const content: JsonContentBlock[] = [];
   let stopReason = "end_turn";
+  // A turn that never said it finished is not an answer: a cancelled native turn
+  // closes its event stream without one.
+  let finished = false;
   let usage: TokenUsageSummary = ZERO_USAGE;
   type ThinkingBlock = { type: "thinking"; thinking: string; signature: string };
   // `openThinking` accepts further deltas; `lastThinking` also survives text and
@@ -1830,6 +1842,7 @@ export async function collectAnthropicJsonResponse(
         case "finish": {
           stopReason = event.stopReason;
           usage = event.usage ?? ZERO_USAGE;
+          finished = true;
           break;
         }
         case "error": {
@@ -1841,6 +1854,23 @@ export async function collectAnthropicJsonResponse(
     }
   } catch (err) {
     return jsonErrorResponse(err);
+  }
+
+  // The caller went away, so nobody reads any of this: answer what the streaming
+  // path answers for the same case rather than a body nobody asked for.
+  if (signal?.aborted === true) {
+    return jsonErrorResponse(
+      new BridgeHttpError(499, "invalid_request_error", "Client closed request"),
+    );
+  }
+  if (!finished) {
+    // `409` is in no branch of Magpie's `retryable()`, so the turn stops at this
+    // account instead of being handed to another one. An empty `200` would be read
+    // as a member that answered nothing at all, which a group asks the next member
+    // for (`fallback.go`, `eventEmptyEnd`).
+    return jsonErrorResponse(
+      new BridgeHttpError(409, "invalid_request_error", TURN_INCOMPLETE_MESSAGE),
+    );
   }
 
   for (const block of content) {

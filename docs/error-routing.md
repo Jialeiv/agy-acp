@@ -274,6 +274,22 @@ Probe history: [`CHANGELOG.md`](../CHANGELOG.md), "a suspended account answers a
 a terminal marker (`AGENT_TERMINAL_MARKERS`), taken at its word only when it is the whole
 answer: a model writing it after prose is quoting it.
 
+## 5.1 A turn that never finished is an error, not an empty answer
+
+- The runtime settles a cancelled native turn without a `finish` event
+  (`src/runtime/worker.ts`, `handlePromptSuccess`: a `cancelled` result closes the queue instead
+  of finishing it). A non-streaming request for that turn now answers `409` with "The agent
+  stopped before it answered this turn"; a caller that had already gone away gets `499`, which is
+  what the streaming path answers for the same case (`src/protocol/anthropic.ts`).
+- Why `409` and not `200` with an empty text block: since 2026-11-15 Magpie reads a group member's
+  reply that ends having said nothing as no answer and asks the next member for it
+  (`c0cf352a8`, `eventEmptyEnd` / `holdWriter.emptyFails`, a `502` nobody rests). An empty `200`
+  would therefore hand our turn to another account, which is the one thing `account_failover: false`
+  prevents. `409` is in no branch of `retryable()` (`fallback.go:2039-2085`).
+- A `finish` with no content stays `200` with the empty text block: that is what a whole but empty
+  reply looks like, and it is a deliberate compatibility choice rather than protection against the
+  rule above, which does not read token usage.
+
 ## 6. Prompt refusals and cloaking
 
 Trigger matching in `src/protocol/cloak.ts` reads past invisible characters and any run of
@@ -294,6 +310,14 @@ and Codex's GPT-6 line), and a user's turn still gets only the two Codex lines: 
 measured passing there. `refusalHint` names the harness whose line was found, in words that carry
 no limit vocabulary. The same matcher feeds `refusalHint`, so a
 prompt that still trips the refusal is reported as a prompt refusal, not as an account's quota.
+
+A session is only resumed under the prompt it was opened with. What the native session received is
+`buildEffectiveSystemText` — the rewrites, `cloak_said_as`, the work-dir note and the still-running
+protocol note — so every reuse decision compares `outgoingSystemDigest`
+(`src/sessions/ledger.ts`): a sha256 of that text with clock lines stripped, plus the cloaking mode
+(reworded user text changes the native history even when the system text carries no trigger). It is
+recorded on the worker and on both shelves; an entry written before the field existed fails closed,
+so a change costs one cold start rather than a continuation under the old prompt.
 
 `cloak_prompts` is **on by default** since 0.1.11, as in the standalone bridge for this vendor: a
 prompt carrying one of those lines is refused whatever quota is left, so it never had a chance.

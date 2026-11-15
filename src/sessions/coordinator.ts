@@ -31,6 +31,7 @@ import {
   matchLedgerPrefix,
   normalizeWorkDir,
   subagentIdFromSessionKey,
+  outgoingSystemDigest,
   systemPromptsMatch,
   type GeneratedToolCall,
   utf8Bytes,
@@ -192,6 +193,24 @@ export class SessionCoordinator {
     return `${worker.account.slotKey}::${worker.account.accountRef}::${worker.sessionId}`;
   }
 
+  /**
+   * `outgoingSystemDigest` of the text a session would be opened with for this
+   * request, so a warm worker or a parked session opened under other rewrites (or
+   * other notes) is not continued under these.
+   */
+  private outgoingDigestFor(
+    req: NormalizedAnthropicRequest,
+    options?: TurnExecutionOptions,
+  ): string {
+    const cloak = cloakEnabled(options?.providerOptions, this.providerOptions);
+    const saidAs =
+      this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs;
+    return outgoingSystemDigest(
+      buildEffectiveSystemText(req.system, req.workDir, cloak, saidAs),
+      cloak,
+    );
+  }
+
   private snapshotForWorker(
     worker: AgySessionWorker,
     foundKey: string,
@@ -205,6 +224,7 @@ export class SessionCoordinator {
       minimalAgent: worker.minimalAgent,
       workDir: worker.workDir,
       systemPrompt: worker.systemPrompt,
+      outgoingSystemDigest: worker.outgoingSystemDigest,
       appliedSystemHistorySeed: worker.appliedSystemHistorySeed,
       registeredTools: worker.registeredTools,
       committedMessages: worker.committedMessages,
@@ -464,6 +484,11 @@ export class SessionCoordinator {
       existingWorker = undefined;
     }
 
+    // What a session opened for this request would carry. A worker opened under
+    // other rewrites (`cloak_prompts`, `cloak_said_as`) or other bridge notes
+    // answers under the old prompt, so it is not treated as warm.
+    const outgoingDigest = this.outgoingDigestFor(req, options);
+
     if (existingWorker && existingWorker.minimalAgent !== requestedMinimalAgent) {
       this.removeActiveWorker(existingWorker);
       this.scheduler.unregisterWorker(existingWorker);
@@ -477,10 +502,9 @@ export class SessionCoordinator {
       existingWorker.state === "AWAITING_TOOL_RESULTS" &&
       !req.subagentId
     ) {
-      const diffSystem = !systemPromptsMatch(
-        existingWorker.systemPrompt,
-        req.system,
-      );
+      const diffSystem =
+        !systemPromptsMatch(existingWorker.systemPrompt, req.system) ||
+        existingWorker.outgoingSystemDigest !== outgoingDigest;
       const diffOpening =
         getOpeningUserText(req.messages) !==
         getOpeningUserText(existingWorker.committedMessages);
@@ -500,7 +524,10 @@ export class SessionCoordinator {
 
     // Case 3: Session in AWAITING_TOOL_RESULTS
     if (existingWorker && existingWorker.state === "AWAITING_TOOL_RESULTS") {
-      if (!systemPromptsMatch(existingWorker.systemPrompt, req.system)) {
+      if (
+        !systemPromptsMatch(existingWorker.systemPrompt, req.system) ||
+        existingWorker.outgoingSystemDigest !== outgoingDigest
+      ) {
         // The pending call belongs to a native session opened under other
         // instructions, and a continuation delivers tool results without ever
         // applying `req.system`: the request would answer under the old prompt.
@@ -555,6 +582,7 @@ export class SessionCoordinator {
       existingWorker &&
       existingWorker.state === "IDLE" &&
       systemPromptsMatch(existingWorker.systemPrompt, req.system) &&
+      existingWorker.outgoingSystemDigest === outgoingDigest &&
       normalizeWorkDir(existingWorker.workDir) === normalizeWorkDir(req.workDir) &&
       isToolSetCompatible(existingWorker.registeredTools, req.tools)
     ) {
@@ -905,18 +933,19 @@ export class SessionCoordinator {
       options?.providerOptions,
       this.providerOptions,
     );
+    const cloakSaidAs =
+      this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs;
+    const effectiveSystem = buildEffectiveSystemText(
+      req.system,
+      req.workDir,
+      cloakPrompts,
+      cloakSaidAs,
+    );
     const coldPlan = planColdHistoryRender(
       priorMessages,
       currentMessages,
       modelSelection.rawModelId,
-      utf8Bytes(
-        buildEffectiveSystemText(
-          req.system,
-          req.workDir,
-          cloakPrompts,
-          this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs,
-        ),
-      ),
+      utf8Bytes(effectiveSystem),
       cloakPrompts,
     );
     const accountFailover =
@@ -932,8 +961,8 @@ export class SessionCoordinator {
         false,
       exposeThinking: req.thinkingEnabled,
       cloakPrompts,
-      cloakSaidAs:
-        this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs,
+      cloakSaidAs,
+      outgoingSystemDigest: outgoingSystemDigest(effectiveSystem, cloakPrompts),
       workDir: req.workDir,
       systemPrompt: req.system,
       systemHistorySeed: coldPlan.systemHistorySeed,
@@ -1001,6 +1030,7 @@ export class SessionCoordinator {
           req,
           sessionKey,
           requestedMinimalAgent,
+          outgoingSystemDigest: outgoingSystemDigest(effectiveSystem, cloakPrompts),
           now: Date.now(),
           hasCustomSpawnFn: Boolean(spawnFn),
           isKeyBusy: (key) =>
@@ -1378,18 +1408,19 @@ export class SessionCoordinator {
     const { priorMessages, currentMessages } = splitPriorAndCurrent(
       req.messages,
     );
+    const cloakSaidAs =
+      this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs;
+    const effectiveSystem = buildEffectiveSystemText(
+      req.system,
+      req.workDir,
+      cloakPrompts,
+      cloakSaidAs,
+    );
     const coldPlan = planColdHistoryRender(
       priorMessages,
       currentMessages,
       modelSelection.rawModelId,
-      utf8Bytes(
-        buildEffectiveSystemText(
-          req.system,
-          req.workDir,
-          cloakPrompts,
-          this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs,
-        ),
-      ),
+      utf8Bytes(effectiveSystem),
       cloakPrompts,
     );
     const worker = new AgySessionWorker(
@@ -1404,9 +1435,8 @@ export class SessionCoordinator {
           false,
         exposeThinking: req.thinkingEnabled,
         cloakPrompts,
-        cloakSaidAs:
-          this.providerOptions?.cloakSaidAs ??
-          options?.providerOptions?.cloakSaidAs,
+        cloakSaidAs,
+        outgoingSystemDigest: outgoingSystemDigest(effectiveSystem, cloakPrompts),
         accountFailover:
           options?.providerOptions?.accountFailover ??
           this.providerOptions?.accountFailover ??

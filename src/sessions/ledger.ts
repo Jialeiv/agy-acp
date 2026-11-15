@@ -59,6 +59,29 @@ export function stableJson(val: unknown): string {
   return `{${pairs.join(",")}}`;
 }
 
+/**
+ * What a native session was opened with, as one comparison value.
+ *
+ * The client's own `system` is not it: the text a session actually receives is
+ * `buildEffectiveSystemText`, which folds in the cloaking rewrites,
+ * `cloak_said_as`, the work-dir note and the still-running protocol note. A
+ * session opened under one of those and resumed under another answers under the
+ * old prompt — with cloaking that means an old refused line keeps being sent, and
+ * the refusal it draws looks like an account problem. Clock lines are stripped
+ * first, since `systemPromptsMatch` ignores them on purpose and a new minute must
+ * not cost a conversation its warm session.
+ *
+ * The cloaking mode is hashed too: turning user-text rewording on or off changes
+ * what the native history received even when the system text carries no trigger
+ * and the rewritten text is byte-identical.
+ */
+export function outgoingSystemDigest(
+  effectiveSystem: string,
+  cloak: boolean,
+): string {
+  return sha256Hex(`v1\u0000cloak=${cloak ? 1 : 0}\u0000${stripVolatileSystem(effectiveSystem)}`);
+}
+
 export function sha256Hex(value: string): string {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
 }

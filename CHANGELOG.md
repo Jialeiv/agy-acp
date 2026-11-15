@@ -4,6 +4,26 @@
 current behavior is described in [`docs/`](docs/README.md), not here. Dates come from the
 repository's recorded history; where none is recorded, none is given.
 
+## 0.1.12
+
+Unpublished. Work dated 2026-11-15.
+
+- **A turn that never finished answers `409`, not an empty `200`.** A cancelled native turn settles
+  without a `finish` event, and the non-streaming encoder used to fall through to `200` with an empty
+  text block. Since Magpie's `c0cf352a8` (2026-11-15) a group member's reply that ends having said
+  nothing is no answer at all, and the next member is asked for it — so that `200` handed our turn to
+  another account. It answers `409` now (`retryable()` reads no such status), a caller that had
+  already gone away gets the streaming path's `499`, and a `cancelled` result closes its turn queue
+  instead of leaving the request waiting for an event that never came.
+- **A session is only resumed under the prompt it was opened with.** Every reuse decision compared
+  the client's `system`, while what the native session received is the effective text: the rewrites,
+  `cloak_said_as`, the work-dir note and the still-running note. Flipping `cloak_prompts`, editing
+  `cloak_said_as` or changing a note therefore left a session opened under the old prompt reusable,
+  and with cloaking that meant the refused line kept being sent. `outgoingSystemDigest` (the
+  effective text, clock lines stripped, the cloaking mode hashed with it) is now recorded on the
+  worker and on both shelves, and a mismatch starts a cold session. Entries written before the field
+  existed fail closed: one cold start per conversation, never a continuation under the old prompt.
+
 ## 0.1.11
 
 Unpublished. Work dated 2026-11-15.

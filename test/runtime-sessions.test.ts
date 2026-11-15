@@ -1724,6 +1724,83 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     await worker.close("test_done");
   });
 
+  test("20a. A warm session is reused only while the prompt it was opened with is unchanged", async () => {
+    const sessionId = `test-fence-${Date.now()}`;
+    const key = `${testAccount.slotKey}::${testAccount.accountRef}::${sessionId}`;
+    const optionsFor = (cloakPrompts: boolean, cloakSaidAs = "") =>
+      ({
+        providerOptions: {
+          quotaRouting: false,
+          cloakPrompts,
+          minimalAgent: false,
+          exposeThinking: false,
+          cloakSaidAs,
+          accountFailover: false,
+        },
+      }) as never;
+    const selection = sel("gemini-3.8-flash");
+    const req1 = makeReq(
+      [{ role: "user", content: [{ type: "text", text: "hello fence" }] }],
+      { model: "gemini-3.8-flash", system: "Fence test with ALPHA", sessionId },
+    );
+
+    for await (const _ of coordinator.executeTurn(
+      testAccount,
+      req1,
+      selection,
+      optionsFor(false),
+    )) {
+      // drain
+    }
+    const warm = coordinator.getActiveWorker(key)!;
+    expect(warm).toBeDefined();
+    const follow = (extra: string) => ({
+      ...req1,
+      messages: [
+        ...warm.committedMessages,
+        { role: "user" as const, content: [{ type: "text" as const, text: extra }] },
+      ],
+    });
+
+    // Control: the same mode and the same system text still reuse the session.
+    for await (const _ of coordinator.executeTurn(
+      testAccount,
+      follow("same mode"),
+      selection,
+      optionsFor(false),
+    )) {
+      // drain
+    }
+    expect(coordinator.getActiveWorker(key)).toBe(warm);
+    expect(warm.closed).toBe(false);
+
+    // Turning rewording on changes what a native session is opened with, so the
+    // session opened without it is not continued: the old prompt would be sent.
+    for await (const _ of coordinator.executeTurn(
+      testAccount,
+      follow("cloak on now"),
+      selection,
+      optionsFor(true),
+    )) {
+      // drain
+    }
+    expect(warm.closed).toBe(true);
+    const second = coordinator.getActiveWorker(key)!;
+    expect(second).not.toBe(warm);
+
+    // Same for the caller's own pairs, when one of them matches the system text.
+    for await (const _ of coordinator.executeTurn(
+      testAccount,
+      follow("said as changed"),
+      selection,
+      optionsFor(true, "ALPHA=BETA"),
+    )) {
+      // drain
+    }
+    expect(second.closed).toBe(true);
+    expect(coordinator.getActiveWorker(key)).not.toBe(second);
+  });
+
   test("20. Assistant prefill merges onto a single assistant message in committedMessages and reuses warm session on Turn N+1", async () => {
     const sessionId = `test-prefill-${Date.now()}`;
     const req1 = makeReq(
@@ -3135,6 +3212,7 @@ describe("Runtime Sessions & Coordinator Integration", () => {
       // conversation under the same session key. It fails the prefix match, so
       // it must be dropped instead of donating its ledger and system seed.
       coordB.shelf.memorySessions.set(sessionKey, {
+        outgoingSystemDigest: "digest-1",
         nativeSessionId: "stale-native-session-from-old-session-a",
         slotKey: testAccount.slotKey,
         accountRef: testAccount.accountRef,

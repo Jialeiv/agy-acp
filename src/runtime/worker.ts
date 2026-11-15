@@ -127,6 +127,12 @@ export interface WorkerOptions {
    */
   thinkingHoldMs?: number;
   /**
+   * `outgoingSystemDigest` of the text this session is opened with. A live worker
+   * is only reused when it matches, so a session opened under other rewrites or
+   * other notes is not continued under these.
+   */
+  outgoingSystemDigest?: string;
+  /**
    * `account_failover`: may Magpie answer this turn from another account of this
    * provider after this one fails? Undefined keeps the retryable statuses (what a
    * worker built on its own describes); the coordinator always resolves the option.
@@ -400,6 +406,8 @@ export class AgySessionWorker {
   }
 
   private readonly turn: TurnContext;
+  /** What this worker's native session was opened with (see `WorkerOptions`). */
+  readonly outgoingSystemDigest: string;
   private readonly usage = new StepUsageTracker();
   private unsubscribeSessionUpdate?: () => void;
   private unregisterMcp?: () => void;
@@ -428,6 +436,7 @@ export class AgySessionWorker {
     this.workDir = this.options.workDir;
     this.minimalAgent = Boolean(this.options.minimalAgent);
     this.turn = new TurnContext({ thinkingHoldMs: this.options.thinkingHoldMs });
+    this.outgoingSystemDigest = this.options.outgoingSystemDigest ?? "";
     this.steerCancelTimeoutMs = this.options.steerCancelTimeoutMs;
     this.steerToolCommitTimeoutMs = this.options.steerToolCommitTimeoutMs;
 
@@ -1800,6 +1809,12 @@ export class AgySessionWorker {
           stopReason,
           usage,
         });
+      } else if (this.turn.queueOpen) {
+        // A cancelled native turn has no answer to finish with, and nobody
+        // suppressed it (a steer cancel does, and owns its queue). Closing the
+        // queue says so: a consumer left waiting would hold the request open
+        // until the client gave up.
+        this.turn.closeQueue();
       }
 
       this.setState("IDLE");

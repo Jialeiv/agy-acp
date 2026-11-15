@@ -567,6 +567,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
       minimalAgent: false,
       workDir: "/tmp/proj",
       systemPrompt: "system instructions",
+      outgoingSystemDigest: "digest-1",
       registeredTools: [],
       committedMessages,
       resumeSupported: true,
@@ -635,6 +636,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
         req,
         sessionKey: rotatedKey,
         requestedMinimalAgent: false,
+        outgoingSystemDigest: "digest-1",
         now: now + 20,
         hasCustomSpawnFn: true,
       });
@@ -650,6 +652,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
         req,
         sessionKey: rotatedKey,
         requestedMinimalAgent: false,
+        outgoingSystemDigest: "digest-1",
         now: now + 20,
         hasCustomSpawnFn: true,
         isKeyBusy: (k) => k === longKey,
@@ -668,6 +671,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
           }),
           sessionKey: rotatedKey,
           requestedMinimalAgent: false,
+          outgoingSystemDigest: "digest-1",
           now: now + 20,
           hasCustomSpawnFn: true,
         }),
@@ -683,6 +687,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
           }),
           sessionKey: rotatedKey,
           requestedMinimalAgent: false,
+          outgoingSystemDigest: "digest-1",
           now: now + 20,
           hasCustomSpawnFn: true,
         }),
@@ -696,6 +701,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
           req,
           sessionKey: `${otherAcct.slotKey}::${otherAcct.accountRef}::rotated-key`,
           requestedMinimalAgent: false,
+          outgoingSystemDigest: "digest-1",
           now: now + 20,
           hasCustomSpawnFn: true,
         }),
@@ -709,6 +715,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
           }),
           sessionKey: rotatedKey,
           requestedMinimalAgent: false,
+          outgoingSystemDigest: "digest-1",
           now: now + 20,
           hasCustomSpawnFn: true,
         }),
@@ -723,6 +730,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
           }),
           sessionKey: `${rotatedKey}::sub:sub-1`,
           requestedMinimalAgent: false,
+          outgoingSystemDigest: "digest-1",
           now: now + 20,
           hasCustomSpawnFn: true,
         }),
@@ -744,11 +752,84 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
         req,
         sessionKey: rotatedKey,
         requestedMinimalAgent: false,
+        outgoingSystemDigest: "digest-1",
         now: now + 20,
         hasCustomSpawnFn: true,
       });
       expect(store.memorySessions.has(rotatedKey)).toBe(false);
     });
+  });
+
+  test("a parked session opened under other prompt rewrites is not resumed", () => {
+    const acct = makeAccount("shelf");
+    const store = new ShelfStore();
+    store.ensureLoaded();
+    const now = Date.now();
+    const key = `${acct.slotKey}::${acct.accountRef}::fence-key`;
+    const req = makeReq(
+      [
+        { role: "user", content: [{ type: "text", text: "u1" }] },
+        { role: "assistant", content: [{ type: "text", text: "a1" }] },
+        { role: "user", content: [{ type: "text", text: "u2" }] },
+      ],
+      { sessionId: "fence-key", system: "system instructions", workDir: "/tmp/proj" },
+    );
+    const params = (digest: string) => ({
+      account: acct,
+      req,
+      sessionKey: key,
+      requestedMinimalAgent: false,
+      outgoingSystemDigest: digest,
+      now: now + 5,
+      hasCustomSpawnFn: true,
+    });
+
+    const parkedMessages: NormalizedMessage[] = [
+      { role: "user", content: [{ type: "text", text: "u1" }] },
+      { role: "assistant", content: [{ type: "text", text: "a1" }] },
+    ];
+    store.park(
+      key,
+      makeSnapshot({ outgoingSystemDigest: "digest-1", committedMessages: parkedMessages }),
+      now,
+    );
+    // Same rewrites: the parked session is the one to continue.
+    expect(store.resolveResume(params("digest-1"))).not.toBeNull();
+    // Another rewording (a cloak toggle, an edited `cloak_said_as`): the native
+    // session was opened under the old prompt, so it is not continued.
+    expect(store.resolveResume(params("digest-2"))).toBeNull();
+
+    // The digest index that survives a restart is fenced the same way, and an entry
+    // written before the fence existed cannot match anything.
+    const persistedKey = `${acct.slotKey}::${acct.accountRef}::fence-persisted`;
+    store.recordPersisted(
+      persistedKey,
+      makeSnapshot({
+        sessionId: "fence-persisted",
+        outgoingSystemDigest: "digest-1",
+        committedMessages: parkedMessages,
+      }),
+      now,
+    );
+    const persistedReq = makeReq(req.messages, {
+      sessionId: "fence-persisted",
+      system: "system instructions",
+      workDir: "/tmp/proj",
+    });
+    expect(
+      store.resolveResume({
+        ...params("digest-2"),
+        req: persistedReq,
+        sessionKey: persistedKey,
+      }),
+    ).toBeNull();
+    expect(
+      store.resolveResume({
+        ...params("digest-1"),
+        req: persistedReq,
+        sessionKey: persistedKey,
+      }),
+    ).not.toBeNull();
   });
 
   test("MED-10: 4 concurrent OS processes preserve all writes, cross-host sees invalidation, reclaims stale lock", async () => {
@@ -775,6 +856,7 @@ describe("Phase 3: MED-10 ShelfStore & secondary content-hash addressing", () =>
           accountRef: "acct",
           minimalAgent: false,
           systemPrompt: "TOP_SECRET_SYS_PROMPT",
+          outgoingSystemDigest: "digest-1",
           registeredTools: [{ name: "t", description: "SECRET_TOOL", inputSchema: { type: "object" } }],
           committedMessages: [
             { role: "user", content: [{ type: "text", text: \`SECRET_USER_\${sid}\` }] },
