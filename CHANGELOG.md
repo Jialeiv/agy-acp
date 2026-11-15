@@ -4,6 +4,35 @@
 current behavior is described in [`docs/`](docs/README.md), not here. Dates come from the
 repository's recorded history; where none is recorded, none is given.
 
+## 0.1.11
+
+Unpublished. Work dated 2026-11-15.
+
+- **`cloak_prompts` is on by default**, matching the standalone bridge for the same vendor
+  (`@magpie-community/opencode-antigravity-auth` 0.1.14): the lines it rewrites are answered as a
+  spent quota whatever quota is left, so a request carrying them never had a chance, and a default
+  that sends them as written only guarantees that refusal. The rewording is still a workaround for
+  a vendor check, which the terms treat as circumvention; the switch turns it off, and the README
+  says what that costs. Claude Code's rotating billing header is dropped either way, and detection
+  of a refusal never depended on the switch.
+- **A `400` the model itself caused is asked once more.** Gemini 4 answers `INVALID_ARGUMENT` to a
+  request it shaped after it had already run, and the same conversation asked again has answered.
+  The prompt goes again exactly once — same session, same payload, only when nothing but a thought
+  had reached the caller and the worker is still generating — and a failure that stays failed is
+  reported with the second attempt's words instead of looping. So the retry is invisible, a thought
+  is now held back for up to 10 s or 512 KiB, released the moment an answer or a tool call starts,
+  and dropped when the turn is asked again: no thinking said twice, and a long thinking turn
+  delayed by at most ten seconds.
+- **Google's region sentence is no longer passed through in a detail.** Magpie's `regionWords`
+  reads "User location is not supported for the API use" as not the account's problem —
+  `retryable()` counts it (`fallback.go:2172`) and `failure()` rests nothing (`routing.go:1435`) —
+  so a body carrying it walked to another account whatever status we answered, `409` included. It
+  is said instead as "the vendor refused the location this connection came from": the reader still
+  learns what happened, and the predicate that would override the stop does not match.
+
+Found while comparing against `@magpie-community/opencode-antigravity-auth` 0.1.14; both fixes are
+theirs in substance, and `docs/error-routing.md` §3.1 records why each wording is what it is.
+
 ## 0.1.10
 
 Version in `package.json`; no `v0.1.10` tag exists yet. Work dated 2026-11-14.

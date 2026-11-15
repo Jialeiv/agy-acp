@@ -1179,6 +1179,77 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     expect(errorEvent?.type === "error" && errorEvent.status).toBeGreaterThanOrEqual(400);
   });
 
+  test("11b. A prompt the model turned down itself is asked again, invisibly", async () => {
+    const sessionId = `test-thin-${Date.now()}`;
+    const req = makeReq(
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "TRIGGER_INVALID_ARGUMENT" }],
+        },
+      ],
+      { model: "gemini-3.8-flash", system: "Thin test", sessionId },
+    );
+
+    const events: TurnStreamEvent[] = [];
+    for await (const event of coordinator.executeTurn(
+      testAccount,
+      req,
+      sel("gemini-3.8-flash"),
+    )) {
+      events.push(event);
+    }
+
+    // The second attempt's answer, and nothing from the failed one: no error, and
+    // none of the thought the first attempt had already produced.
+    const text = events
+      .filter((e): e is Extract<TurnStreamEvent, { type: "text_delta" }> => e.type === "text_delta")
+      .map((e) => e.text)
+      .join("");
+    expect(text).toContain("answered-once");
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    const thinking = events
+      .filter(
+        (e): e is Extract<TurnStreamEvent, { type: "thinking_delta" }> =>
+          e.type === "thinking_delta",
+      )
+      .map((e) => e.thinking)
+      .join("");
+    expect(thinking).not.toContain("shaping the call");
+  });
+
+  test("11c. A rejected call that stays rejected is reported, not looped", async () => {
+    const sessionId = `test-thin-always-${Date.now()}`;
+    const req = makeReq(
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "TRIGGER_INVALID_ARGUMENT_ALWAYS" }],
+        },
+      ],
+      { model: "gemini-3.8-flash", system: "Thin test", sessionId },
+    );
+
+    const events: TurnStreamEvent[] = [];
+    for await (const event of coordinator.executeTurn(
+      testAccount,
+      req,
+      sel("gemini-3.8-flash"),
+    )) {
+      events.push(event);
+    }
+
+    const errorEvent = events.find(
+      (e): e is Extract<TurnStreamEvent, { type: "error" }> => e.type === "error",
+    );
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent?.status).toBe(400);
+    // Asked twice and reported with the second attempt's words: a third would be
+    // a loop, and the first would hide that the prompt had been tried again.
+    expect(errorEvent?.message).toContain("attempt 2");
+    expect(errorEvent?.message).not.toContain("attempt 3");
+  });
+
   test("12. Nested session/update envelope parsing and session ID filtering", async () => {
     const sessionId = `test-nested-${Date.now()}`;
     const req = makeReq(

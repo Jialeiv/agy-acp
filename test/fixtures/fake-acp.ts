@@ -7,6 +7,7 @@ let currentModel = "default";
 let currentThoughtLevel = "default";
 let appendedSystemPrompt = "";
 let cancelled = false;
+let invalidArgumentAttempts = 0;
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -280,6 +281,39 @@ rl.on("line", async (line) => {
           permissionOutcome: permRes?.outcome,
           usage: { inputTokens: 5, outputTokens: 5 },
         },
+      });
+      return;
+    }
+
+    // Gemini 4's rejected call: the first attempt fails after the model shaped a
+    // call, the second answers. The ALWAYS variant never recovers, and says which
+    // attempt it was so a retry count is visible from the outside.
+    if (promptText.includes("TRIGGER_INVALID_ARGUMENT")) {
+      invalidArgumentAttempts += 1;
+      const always = promptText.includes("TRIGGER_INVALID_ARGUMENT_ALWAYS");
+      if (always || invalidArgumentAttempts === 1) {
+        notify("session/update", {
+          sessionUpdate: "agent_thought_chunk",
+          content: { text: "shaping the call" },
+        });
+        send({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32602,
+            message: `INVALID_ARGUMENT: request contains an invalid argument (attempt ${invalidArgumentAttempts})`,
+          },
+        });
+        return;
+      }
+      notify("session/update", {
+        sessionUpdate: "agent_message_chunk",
+        content: { text: "answered-once" },
+      });
+      send({
+        jsonrpc: "2.0",
+        id,
+        result: { usage: { inputTokens: 7, outputTokens: 3 } },
       });
       return;
     }

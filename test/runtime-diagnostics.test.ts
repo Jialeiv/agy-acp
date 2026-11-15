@@ -529,6 +529,19 @@ describe("extractErrorEvidence and classifyAgentFailure", () => {
     expect(limitFreeDetail("permission denied: region not allowed")).toBe(
       "permission denied: region not allowed",
     );
+    // Google's region sentence is how Magpie's `regionWords` (fallback.go:1887)
+    // learns to retry the turn on another account whatever status we answer
+    // (`fallback.go:2172`, `routing.go:1435`), so the fact is said in words that
+    // predicate has none of. Anything short of its exact phrases still passes.
+    for (const said of [
+      "FAILED_PRECONDITION: User location is not supported for the API use.",
+      "unsupported_country_region_territory",
+      "country, region, or territory not supported",
+    ]) {
+      const detail = limitFreeDetail(said);
+      expect(detail).toBe("the vendor refused the location this connection came from");
+      expect(detail).not.toMatch(/user location|country, region|territory/i);
+    }
     // A token ceiling in the detail vetoes Magpie's overflow reading outright.
     expect(tooLongVetoed("max_output_tokens is 8192")).toBe(true);
     expect(tooLongVetoed("1000 tokens per minute")).toBe(true);

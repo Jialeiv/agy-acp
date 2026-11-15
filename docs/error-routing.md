@@ -186,6 +186,27 @@ Log and stderr text passes through filters before any keyword is matched:
 Antigravity's generic 429 is `RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).`
 Google's boilerplate; on its own it names no window.
 
+## 3.1 A `400` the model itself caused
+
+- `invalid_request` answers `400` with "Invalid request to agent" and the vendor's words after
+  `Upstream said:`, minus limit wording (`limitFreeDetail`).
+- **Asked once more.** Gemini 4 answers `INVALID_ARGUMENT` to a request the model shaped itself,
+  after it had already run; the same conversation asked again has answered. The prompt goes again
+  exactly once (`askThinInvalidArgumentAgain` in `src/runtime/worker.ts`), and only when nothing
+  but a thought had reached the caller and the worker is still generating. A failure that stays
+  failed is reported with the second attempt's words rather than looped. So that the retry is
+  invisible, a thought is held back for up to 10 s or 512 KiB (`THINKING_HOLD_MS`,
+  `THINKING_HOLD_MAX_BYTES` in `src/runtime/turn-context.ts`), released the moment the answer or a
+  tool call starts, and dropped when the turn is asked again: a long thinking turn is delayed by at
+  most ten seconds, and a failed attempt's thinking is never said twice.
+- **A region-shaped detail is not passed through.** Magpie's `regionWords`
+  (`internal/gateway/fallback.go:1887`) reads Google's "User location is not supported for the API
+  use" as not the account's problem: `retryable()` counts it (`fallback.go:2172`) and `failure()`
+  rests nothing and counts no failure (`routing.go:1435`), so a body carrying it is retried on
+  another account whatever status the plugin answered, `409` included. The fact is said instead as
+  "the vendor refused the location this connection came from", which Magpie has no predicate for.
+  Wording short of those three exact phrases still passes through unchanged.
+
 ## 4. Upstream retry notices and retry storms
 
 `agy` retries transient `502`/`503`/`504` and per-minute `429` failures in-process with
@@ -257,6 +278,14 @@ those broken-up copies, so the cloak rewords each line the way `agy-cli/cloak.mj
 line -> "built on the Agent SDK by Anthropic", and Claude Code's billing line dropped).
 Zero-width insertion is no defence and is not used. The same matcher feeds `refusalHint`, so a
 prompt that still trips the refusal is reported as a prompt refusal, not as an account's quota.
+
+`cloak_prompts` is **on by default** since 0.1.11, as in the standalone bridge for this vendor: a
+prompt carrying one of those lines is refused whatever quota is left, so it never had a chance.
+The rewording is still a workaround for a vendor check, which the vendor's terms treat as
+circumvention, so the switch turns it off and the README says what that costs. Detection of the
+refusal never depended on the switch: a `429` on a prompt that carries a trigger line is reported
+as a prompt refusal whether or not rewording is on. Claude Code's rotating billing header is
+dropped either way — it changes every turn and no model reads it.
 
 ## 7. Turn-scoped log inspection (`TurnLogWatch`)
 

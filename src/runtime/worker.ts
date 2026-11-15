@@ -76,6 +76,17 @@ import { AsyncEventQueue, TurnContext } from "./turn-context";
 const TURN_IDLE_BUDGET_MS = 10 * 60 * 1000;
 /** A tool call may legitimately take far longer than a quiet generation. */
 const TURN_TOOL_IDLE_BUDGET_MS = 60 * 60 * 1000;
+
+/**
+ * A prompt the model turned down itself: `INVALID_ARGUMENT` on a request the model
+ * built (a tool call it shaped), which Google's own words describe as a region or
+ * account refusal and which no rewording reaches.
+ */
+const THIN_INVALID_ARGUMENT_RE =
+  /INVALID_ARGUMENT|request contains an invalid argument|invalid argument: /i;
+
+/** How long to wait before asking such a prompt again (the request, not the call). */
+const THIN_INVALID_ARGUMENT_PAUSE_MS = 300;
 const TURN_IDLE_TICK_MS = 30 * 1000;
 
 export type WorkerState =
@@ -392,6 +403,8 @@ export class AgySessionWorker {
   private turnStderrBaseline: string = "";
   /** One retry-storm abort per turn; later notices of the same turn are moot. */
   private retryStormAborted = false;
+  /** The last `session/prompt` payload, so a prompt the model refused can be asked again. */
+  private lastPromptPayload: Record<string, unknown> | null = null;
   /** Set once this turn's log proves `agy` retried upstream (see diagnostics). */
   private upstreamRetryCorroborated = false;
   private readonly ownsWorkspaceDir: boolean;
@@ -1649,12 +1662,13 @@ export class AgySessionWorker {
 
     const seq = this.turn.nextPromptEpoch();
 
+    this.lastPromptPayload = {
+      sessionId: this.nativeSessionId,
+      prompt,
+    };
     const promptPromise = this.conn.request(
       "session/prompt",
-      {
-        sessionId: this.nativeSessionId,
-        prompt,
-      },
+      this.lastPromptPayload,
       // A backstop only: the progress watchdog above retires a silent turn in
       // ten minutes, and this bounds a turn that keeps talking forever.
       TURN_TOOL_IDLE_BUDGET_MS,
@@ -1794,6 +1808,7 @@ export class AgySessionWorker {
     if (this.turn.isSuppressedOrStale(seq)) {
       return;
     }
+    if (this.askThinInvalidArgumentAgain(err, seq)) return;
     this.broker.markHttpTurnClosed();
     if (this._state === "GENERATING") {
       this.turn.finishWith(this.diagnoseTerminationError(err));
@@ -1808,6 +1823,47 @@ export class AgySessionWorker {
       // next turn gets a clean one; the shelf keeps the conversation.
       void this.close("prompt_timeout");
     }
+  }
+
+  /**
+   * Asks a prompt again when the model itself turned down a call it built, and
+   * nothing but a thought had reached the caller yet.
+   *
+   * Gemini 4 answers `INVALID_ARGUMENT` to the request it shaped once it had run;
+   * the same conversation asked again has answered. The call is made once: a turn
+   * that meets it twice is reported, with the vendor's words, rather than looped.
+   * Returns true when the turn continues, so the caller does not settle it here.
+   */
+  private askThinInvalidArgumentAgain(err: any, seq?: number): boolean {
+    if (this.turn.thinInvalidRetried) return false;
+    if ((err as { acpTimeout?: boolean })?.acpTimeout) return false;
+    if (this._state !== "GENERATING" || this.isClosed) return false;
+    // Everything the caller has seen is a thought that is still held back.
+    if (this.turn.answerDelivered) return false;
+    const text = [err?.message, err?.data?.code, err?.data?.message]
+      .filter((part) => typeof part === "string" && part !== "")
+      .join(" ");
+    if (!THIN_INVALID_ARGUMENT_RE.test(text)) return false;
+    const payload = this.lastPromptPayload;
+    if (!payload) return false;
+
+    this.turn.markThinInvalidRetried();
+    this.turn.discardHeldThinking();
+    this.armTurnIdleWatchdog();
+    void (async () => {
+      await new Promise((resolve) => setTimeout(resolve, THIN_INVALID_ARGUMENT_PAUSE_MS));
+      if (this._state !== "GENERATING" || this.isClosed) return;
+      const promise = this.conn.request(
+        "session/prompt",
+        payload,
+        TURN_TOOL_IDLE_BUDGET_MS,
+      );
+      this.turn.pendingPrompt = promise;
+      promise
+        .then((result) => this.handlePromptSuccess(result, seq))
+        .catch((retryErr) => this.handlePromptError(retryErr, seq));
+    })();
+    return true;
   }
 
   private async handleClientAbort(): Promise<void> {

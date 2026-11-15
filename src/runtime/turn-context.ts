@@ -28,6 +28,19 @@ export const DEFAULT_MAX_TURN_QUEUE_BYTES = 16 * 1024 * 1024;
  */
 const MAX_NOTICE_HOLD_BYTES = 4096;
 
+/**
+ * How long a thought is held back before it goes to the caller, and how much of
+ * it is held.
+ *
+ * A prompt the model turns down itself (`INVALID_ARGUMENT` after it ran) is asked
+ * again once. Anything already streamed would be said twice, and a thought is the
+ * likeliest thing to have streamed by then, so it waits for the first answer or
+ * tool call — or this deadline, whichever comes first, so a long-thinking turn is
+ * delayed by no more than ten seconds and a chatty one by no more than 512 KiB.
+ */
+export const THINKING_HOLD_MS = 10_000;
+export const THINKING_HOLD_MAX_BYTES = 512 * 1024;
+
 const DEFAULT_EVENT_OVERHEAD_BYTES = 128;
 
 function defaultEstimateEventBytes(item: any): number {
@@ -174,7 +187,16 @@ export class AsyncEventQueue<T> implements AsyncIterable<T> {
  * callback from the live one, the active event queue, and the text the model
  * has produced but not yet handed over.
  */
+export interface TurnContextOptions {
+  /** Longest a thought is held before it goes live. Defaults to `THINKING_HOLD_MS`. */
+  thinkingHoldMs?: number;
+  /** Most thought held before it goes live. Defaults to `THINKING_HOLD_MAX_BYTES`. */
+  thinkingHoldMaxBytes?: number;
+}
+
 export class TurnContext {
+  private readonly thinkingHoldMs: number;
+  private readonly thinkingHoldMaxBytes: number;
   private promptSeq = 0;
   private activePromptSeq = 0;
   private steerCancelSuppressed = false;
@@ -183,9 +205,21 @@ export class TurnContext {
   private held = "";
   private prompt: Promise<any> | null = null;
   private delivered = false;
+  /** True once anything but a thought reached the caller (answer or tool call). */
+  private answered = false;
+  /** Held thought while the turn may still be asked again; `null` once released. */
+  private thinkingHeld: string | null = "";
+  private thinkingHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  private thinInvalidAskedAgain = false;
   private retryNotices = 0;
   private retryNoticeText = "";
   private noticeTail = "";
+
+  constructor(options: TurnContextOptions = {}) {
+    this.thinkingHoldMs = options.thinkingHoldMs ?? THINKING_HOLD_MS;
+    this.thinkingHoldMaxBytes =
+      options.thinkingHoldMaxBytes ?? THINKING_HOLD_MAX_BYTES;
+  }
 
   /**
    * While true, `session/update` text is dropped and prompt callbacks only bank
@@ -318,6 +352,10 @@ export class TurnContext {
     this.thinking = "";
     this.held = "";
     this.delivered = false;
+    this.answered = false;
+    this.thinkingHeld = "";
+    this.clearThinkingHoldTimer();
+    this.thinInvalidAskedAgain = false;
     this.retryNotices = 0;
     this.retryNoticeText = "";
     this.noticeTail = "";
@@ -334,6 +372,7 @@ export class TurnContext {
    * from here (a batch hand-off, which settles the turn from another task).
    */
   takeQueue(): AsyncEventQueue<TurnStreamEvent> | null {
+    this.releaseThinking();
     const queue = this.quietQueue;
     this.quietQueue = null;
     return queue;
@@ -355,13 +394,20 @@ export class TurnContext {
   }
 
   pushEvent(event: TurnStreamEvent): void {
+    // The answer starts before the thought may be released: the caller reads them
+    // in the order they were produced.
+    if (event.type !== "thinking_delta") this.releaseThinking();
     if (event.type === "text_delta") {
       // Whitespace alone is not work: it is what a stripped retry notice leaves.
-      if (String(event.text ?? "").trim() !== "") this.delivered = true;
+      if (String(event.text ?? "").trim() !== "") {
+        this.delivered = true;
+        this.answered = true;
+      }
     } else if (event.type === "thinking_delta") {
       if (String(event.thinking ?? "").trim() !== "") this.delivered = true;
     } else if (event.type === "tool_use") {
       this.delivered = true;
+      this.answered = true;
     }
     this.quietQueue?.push(event);
   }
@@ -373,7 +419,72 @@ export class TurnContext {
   appendThinking(delta: string): void {
     this.thinking += delta;
     if (delta.trim() !== "") this.delivered = true;
-    this.quietQueue?.push({ type: "thinking_delta", thinking: delta });
+    if (this.thinkingHeld === null) {
+      this.quietQueue?.push({ type: "thinking_delta", thinking: delta });
+      return;
+    }
+    this.thinkingHeld += delta;
+    if (Buffer.byteLength(this.thinkingHeld, "utf8") > this.thinkingHoldMaxBytes) {
+      this.releaseThinking();
+      return;
+    }
+    this.armThinkingHold();
+  }
+
+  /** True once an answer or a tool call reached the caller. */
+  get answerDelivered(): boolean {
+    return this.answered;
+  }
+
+  /** True once this turn's `INVALID_ARGUMENT` has already been asked again. */
+  get thinInvalidRetried(): boolean {
+    return this.thinInvalidAskedAgain;
+  }
+
+  markThinInvalidRetried(): void {
+    this.thinInvalidAskedAgain = true;
+  }
+
+  /**
+   * Sends the held thought now and lets the rest of the turn stream live. Called
+   * whenever the answer starts, and when the hold's deadline or byte ceiling is
+   * reached.
+   */
+  releaseThinking(): void {
+    this.clearThinkingHoldTimer();
+    if (this.thinkingHeld === null) return;
+    const held = this.thinkingHeld;
+    this.thinkingHeld = null;
+    if (held !== "") {
+      this.quietQueue?.push({ type: "thinking_delta", thinking: held });
+    }
+  }
+
+  /**
+   * Drops the held thought and starts holding again: the turn is being asked a
+   * second time, and the failed attempt's thoughts were never the answer.
+   */
+  discardHeldThinking(): void {
+    this.clearThinkingHoldTimer();
+    this.thinkingHeld = "";
+    this.thinking = "";
+  }
+
+  private armThinkingHold(): void {
+    if (this.thinkingHoldTimer !== null) return;
+    this.thinkingHoldTimer = setTimeout(() => {
+      this.thinkingHoldTimer = null;
+      this.releaseThinking();
+    }, this.thinkingHoldMs);
+    // A held thought must never keep a process alive on its own.
+    (this.thinkingHoldTimer as { unref?: () => void }).unref?.();
+  }
+
+  private clearThinkingHoldTimer(): void {
+    if (this.thinkingHoldTimer !== null) {
+      clearTimeout(this.thinkingHoldTimer);
+      this.thinkingHoldTimer = null;
+    }
   }
 
   /** The accumulated thought, cleared: the bytes the next signature covers. */
@@ -392,6 +503,7 @@ export class TurnContext {
    * caller then closes twice.
    */
   finishWith(event: TurnStreamEvent): void {
+    this.releaseThinking();
     const queue = this.quietQueue;
     if (!queue) return;
     this.quietQueue = null;
@@ -401,6 +513,7 @@ export class TurnContext {
 
   /** Closes the turn's queue without a final event. */
   closeQueue(): void {
+    this.releaseThinking();
     const queue = this.quietQueue;
     if (!queue) return;
     this.quietQueue = null;
@@ -409,6 +522,7 @@ export class TurnContext {
 
   /** Fails the turn's queue so its consumer sees `err`. */
   failQueue(err: unknown): void {
+    this.releaseThinking();
     const queue = this.quietQueue;
     if (!queue) return;
     this.quietQueue = null;

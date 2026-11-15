@@ -53,6 +53,8 @@ import { encodeAnthropicSseResponse } from "../src/protocol/anthropic";
 import {
   AsyncEventQueue,
   DEFAULT_MAX_TURN_QUEUE_BYTES,
+  THINKING_HOLD_MAX_BYTES,
+  THINKING_HOLD_MS,
   TurnContext,
 } from "../src/runtime/turn-context";
 import { StepUsageTracker } from "../src/usage/tracker";
@@ -1463,6 +1465,64 @@ describe("Phase 3: inline image fitting & broker/prompt-render wiring", () => {
 // ===========================================================================
 
 describe("Phase 3: ARCH-2 TurnContext, StepUsageTracker, worker.pin(), scheduler hooks", () => {
+  test("a thought is held until the answer starts, so a retried turn says it once", async () => {
+    const quiet = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    expect(THINKING_HOLD_MS).toBe(10_000);
+    expect(THINKING_HOLD_MAX_BYTES).toBe(512 * 1024);
+
+    // Held: nothing reaches the caller while the turn may still be asked again.
+    const tc = new TurnContext();
+    tc.beginTurnQueue({ onOverflow: () => {} });
+    const queue = tc.activeQueue!;
+    tc.appendThinking("thinking one");
+    expect(queue.pendingBytes).toBe(0);
+    expect(tc.answerDelivered).toBe(false);
+
+    // Released, in order, the moment the answer starts.
+    tc.pushEvent({ type: "text_delta", text: "the answer" });
+    expect(tc.answerDelivered).toBe(true);
+    expect(await queue.next()).toEqual({
+      value: { type: "thinking_delta", thinking: "thinking one" },
+      done: false,
+    });
+    expect(await queue.next()).toEqual({
+      value: { type: "text_delta", text: "the answer" },
+      done: false,
+    });
+
+    // A failed attempt's thought is dropped, and the next attempt is held again.
+    const tc2 = new TurnContext();
+    tc2.beginTurnQueue({ onOverflow: () => {} });
+    const queue2 = tc2.activeQueue!;
+    tc2.appendThinking("from the attempt that failed");
+    tc2.discardHeldThinking();
+    expect(tc2.thinInvalidRetried).toBe(false);
+    tc2.markThinInvalidRetried();
+    expect(tc2.thinInvalidRetried).toBe(true);
+    tc2.pushEvent({ type: "text_delta", text: "second attempt" });
+    expect(await queue2.next()).toEqual({
+      value: { type: "text_delta", text: "second attempt" },
+      done: false,
+    });
+    expect(queue2.pendingBytes).toBe(0);
+
+    // The hold's deadline releases what it holds, so a long thinking turn is not
+    // withheld behind it.
+    const tc3 = new TurnContext({ thinkingHoldMs: 20 });
+    tc3.beginTurnQueue({ onOverflow: () => {} });
+    const queue3 = tc3.activeQueue!;
+    tc3.appendThinking("long thought");
+    expect(queue3.pendingBytes).toBe(0);
+    for (let waited = 0; waited < 400 && queue3.pendingBytes === 0; waited += 10) {
+      await quiet(10);
+    }
+    expect(await queue3.next()).toEqual({
+      value: { type: "thinking_delta", thinking: "long thought" },
+      done: false,
+    });
+    tc3.closeQueue();
+  });
+
   test("TurnContext epochs, thinking accumulation, overflow-safe finishWith, takeQueue", async () => {
     expect(DEFAULT_MAX_TURN_QUEUE_BYTES).toBe(16 * 1024 * 1024);
     const tc = new TurnContext();

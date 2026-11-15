@@ -87,7 +87,8 @@ the recommended decision and how to accept it. When an item ships, delete it her
      including them produced a 12.7 s backtracking blow-up on a long U+FEFF run; the others' `\s+`
      matches them, so a line whose words are separated only by U+FEFF is rewritten by them and
      missed here. Any fix has to be a bounded run plus a timing test, not `\s`.
-- Decision: open, both low priority with cloaking off by default.
+- Decision: open, both low priority (cloaking is on by default since 0.1.11, so a miss now
+  costs the request).
 - Acceptance: a test that the phrase is rewritten in the scope it was added for and left alone
   everywhere else; for (2), a `bun test` timing check with a 3,200-character U+FEFF run.
 
@@ -109,7 +110,25 @@ the recommended decision and how to accept it. When an item ships, delete it her
 - Decision: fix in that order, each with a reproduction.
 - Acceptance: a test per defect that fails before the fix.
 
-## 9. Decisions not yet made
+## 9. A session key when the host names no session
+
+- Problem: `sessionId` comes from `x-agy-session-id` or `x-magpie-session` and nowhere else
+  (`src/protocol/anthropic.ts:958-960`). A client that sends neither is stateless here
+  (`src/sessions/coordinator.ts:339-341`), so every turn re-renders the whole history and no
+  prefix is reused.
+- Evidence it can be derived: `magpie-community/antigravity` (0.1.14) hashes the session, the
+  subagent and the conversation's first *real* user turn, skipping injected preambles
+  (`INJECTED_USER_TEXT`: `# AGENTS.md`, `<environment_context>`, `<system-reminder>`,
+  `<permissions instructions>`, `{"page_id"` snapshots, subagent notifications), and ignores a
+  session id shaped like a per-request one (`^magpie-[0-9a-f]{24}$`).
+- Fix: derive the same way, with the work directory and subagent in the hash so two conversations
+  that open with the same prompt do not share a ledger. It must be a *stable* derivation: a wrong
+  collision merges two conversations' shelves, which is worse than no reuse.
+- Acceptance: with no session header, two turns of one conversation reuse the worker and the
+  second prompt is a prefix continuation; two conversations with an identical first prompt get
+  different session keys; a request with no user text at all stays stateless.
+
+## 10. Decisions not yet made
 
 Each needs a decision before any code; none is scheduled.
 

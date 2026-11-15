@@ -618,6 +618,23 @@ export function upstreamDetail(text: string, limit = 400): string {
  * not appended at all: the fixed sentence is the truthful one there, and Magpie
  * reads the appended bytes too.
  */
+const REGION_REFUSED_RE =
+  /user location is not supported for the api use|unsupported_country_region_territory|country, region,? or territory not supported/i;
+
+/**
+ * What a region-shaped refusal is said as, so Magpie does not read the vendor's
+ * own words for it.
+ *
+ * Magpie's `regionWords` (`internal/gateway/fallback.go:1887`) reads Google's
+ * sentence as "not the account's problem": `retryable()` counts it
+ * (`fallback.go:2172`) and `failure()` rests nothing, counting no failure
+ * (`routing.go:1435`), so a turn this plugin stopped is walked to another account
+ * all the same — the one thing `account_failover: false` exists to prevent. The
+ * fact still reaches the reader, in words Magpie has no predicate for.
+ */
+const CONNECTION_LOCATION_REFUSED =
+  "the vendor refused the location this connection came from";
+
 export function limitFreeDetail(text: string): string {
   const cleaned = String(text ?? "")
     .replace(/\s*\(\s*e\.g\.?\s*check quota\s*\)/gi, "")
@@ -632,6 +649,7 @@ export function limitFreeDetail(text: string): string {
   ) {
     return "";
   }
+  if (REGION_REFUSED_RE.test(cleaned)) return CONNECTION_LOCATION_REFUSED;
   return upstreamDetail(cleaned);
 }
 

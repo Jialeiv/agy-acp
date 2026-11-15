@@ -85,6 +85,9 @@ linked documents.
 | Idea | Seen in | Status |
 |---|---|---|
 | Read a turn's usage from the prompt result | estebanforge | adopted in 0.1.10, with SQLite step rows as fallback |
+| Ask again a `400` the model itself caused, holding its thought back so the retry is invisible | `magpie-community/antigravity` 0.1.14 (direct HTTP) | adopted in 0.1.11: once, only when nothing but a thought reached the caller, with a 10 s / 512 KiB hold |
+| Never pass a region-shaped vendor sentence through in a detail, since Magpie's `regionWords` overrides any status | `magpie-community/antigravity` 0.1.14 | adopted in 0.1.11 as a fixed sentence Magpie has no predicate for |
+| Session key from the first real user turn, skipping injected preambles, when the host names no session | `magpie-community/antigravity` 0.1.14 | open ([plan](../plan.md)); here a header-less request is stateless, which renders the whole history every turn |
 | Inactivity watchdog with a separate long window while tools run | zacbemis; also tianzuo555, estebanforge | adopted in 0.1.10 (10 / 60 min, wall clock as backstop) |
 | Fail instead of truncating when information would be lost | zacbemis | adopted in 0.1.10 for a raw oversized turn; a client's own `<conversation>` compaction request is still trimmed, by design |
 | "Usage Limit Reached ... reset in" as a named window and `Retry-After` source | zacbemis | adopted in 0.1.10 for relative resets; absolute resets open ([plan](../plan.md)) |
@@ -123,6 +126,10 @@ linked documents.
 - Multi-account pooling, per-account isolation and quota attribution exist only here.
 - Failure answers are designed for a router that reads status and wording; no sibling has a rule
   that a non-limit body carries no limit words.
+- `magpie-community/antigravity` talks to Code Assist directly and dropped the six-hour rest and
+  the "ask the other accounts first" behaviour, answering `400` so Magpie moves on at once; here
+  the same verdicts answer `409` so the turn stops and the user picks the next account, and
+  `cloak_prompts` is a switch where theirs always rewords.
 - Only this plugin recognizes `agy`'s terminal notices (generic, dead connection, spent credit)
   and the suspension sentence delivered as content.
 - zacbemis's quota parser is one fixed string, so any rewording disables it; this plugin matches a
