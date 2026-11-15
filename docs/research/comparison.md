@@ -97,7 +97,7 @@ linked documents.
 | Inactivity watchdog with a separate long window while tools run | zacbemis; also tianzuo555, estebanforge | adopted in 0.1.10 (10 / 60 min, wall clock as backstop) |
 | Fail instead of truncating when information would be lost | zacbemis | adopted in 0.1.10 for a raw oversized turn; a client's own `<conversation>` compaction request is still trimmed, by design |
 | "Usage Limit Reached ... reset in" as a named window and `Retry-After` source | zacbemis | adopted in 0.1.10 for relative resets; absolute resets open ([plan](../plan.md)) |
-| Progress or relay path for long tool calls | fdkevin0 (SSE-first, 85 s relay), estebanforge (20 s poll), tianzuo555 (cap below the upstream deadline) | open ([plan](../plan.md)) |
+| Progress or relay path for long tool calls | fdkevin0 (SSE-first, 85 s relay), estebanforge (20 s poll), tianzuo555 (cap below the upstream deadline) | adopted: a 150 s "still running" handoff and `mcp_magpie_await_result`, verified through Magpie's own gateway on a live host (a result delivered 200 s after the call answered `42`, 20 s past `agy`'s measured 180.004 s abort) |
 | Output-cap continuation notice handling | fdkevin0 | open ([plan](../plan.md)); a bounded, log-corroborated variant, not their unbounded hold |
 | Bounded ACP stdout reassembly | estebanforge, zacbemis | open ([plan](../plan.md)); byte accounting, not their string-length check |
 | Wider redaction vocabulary (`AIza`, `sk-`, `npm_`, `gh*_`, URL userinfo, cookies, JSON secret keys) | zacbemis | open ([plan](../plan.md)); `redactSecrets` (`agy-acp:src/accounts/env.ts:605`) covers bearer, `ya29.`, `1//`, `4/0A`, `/mcp/<token>`, OAuth parameters and JSON keys, which zacbemis lacks |
@@ -113,7 +113,7 @@ linked documents.
 | Synthetic thought summaries | tianzuo555 | not adopted: ACP supplies real thought text |
 | Native read-only re-execution plus replay wrapper | tianzuo555, estebanforge (stream-json) | not adopted: the caller is an Anthropic HTTP client, not pi's renderer, and `agy` built-ins are disabled |
 | pi-style error prefixes and regex taxonomy | fdkevin0 | not adopted: `resource_exhausted` -> `QUOTA` -> `quota exceeded:` would present a transient limit as a spent window, and `token limit` would read an output ceiling as overflow |
-| "Still running" / poll protocol | fdkevin0, estebanforge | rejected for the current design: bounded waiting and a fresh-session replay of the completed result, which keeps the broker's authentic `tool_use` / `tool_result` contract ([plan](../plan.md) item 1); the relay stays described in the two sibling documents |
+| "Still running" / poll protocol | fdkevin0, estebanforge | adopted as a relay rather than their poll shapes: the model asks once through `mcp_magpie_await_result`, and the caller's real result lands in the same native prompt, so the broker keeps the authentic `tool_use` / `tool_result` contract |
 | Stream-json carrier staging; a 25 KB ACP limit | estebanforge | not adopted: `systemPrompt.append` is capability-gated at session creation; no evidence of a 25 KB ACP limit |
 | Kill-first cancel based on the RC01 probe | estebanforge | not adopted: notification, broker cancel and a 1.5 s settle before retirement already cover a hung cancel |
 | Two turn engines behind one interface | estebanforge | not adopted: it doubles every behavioral claim; stream-json would be a separate spike |

@@ -201,6 +201,12 @@ implemented; §8b, §9 and §10 are the older open work.
   continuation, and without their silent 65,536-character truncation.
 - **`error: null` is read as success** (`d64a548`): `src/runtime/acp-connection.ts:242-257`.
   Done when a malformed error envelope fails the request instead of resolving `undefined`.
+- **An empty `200` is retryable again** (host `c0cf352a8`, 2026-11-15): Magpie now turns a
+  reply that carries neither content nor a finished stream into a `502` when a group has another
+  member, so the cancelled non-streaming answer this plugin still returns as `200 end_turn`
+  becomes a walk to another account — the stop that does not stop, one layer up from our status
+  choices. Done when a cancelled non-streaming request answers a status Magpie does not read as
+  "another member may do better".
 - **Only real billing metadata is deleted** (`DylanLIiii` `b2baef1`): our
   `stripBillingHeader` deletes any line starting with the header, inside a fenced example too, and
   does so with cloaking off (`src/protocol/cloak.ts:119-127`). Done when a quoted example keeps its
