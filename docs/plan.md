@@ -115,7 +115,10 @@ the recommended decision and how to accept it. When an item ships, delete it her
 - Problem: `sessionId` comes from `x-agy-session-id` or `x-magpie-session` and nowhere else
   (`src/protocol/anthropic.ts:958-960`). A client that sends neither is stateless here
   (`src/sessions/coordinator.ts:339-341`), so every turn re-renders the whole history and no
-  prefix is reused.
+  prefix is reused. Correction: behind Magpie this is rare — the host derives a conversation id
+  and passes it to the plugin (`gateway.go:6399`, `plugins.go:794-796`, `host.js:3500-3506`),
+  which `src/index.ts:416-417` copies into `x-agy-session-id`. The gap is a client that talks to
+  the plugin without the host in front of it, so this item is smaller than it first read.
 - Evidence it can be derived: `magpie-community/antigravity` (0.1.14) hashes the session, the
   subagent and the conversation's first *real* user turn, skipping injected preambles
   (`INJECTED_USER_TEXT`: `# AGENTS.md`, `<environment_context>`, `<system-reminder>`,
@@ -157,6 +160,51 @@ Each needs a decision before any code; none is scheduled.
 - Not yet evaluated against this plugin: selector read-back and permission-mode drift checks
   (zacbemis); "status OK with no model output" as a failure, `<SYSTEM_MESSAGE>` echo stripping,
   and strip-and-reparse of known noise lines (estebanforge).
+
+## 11. From the 2026-11-15 comparison (not yet started)
+
+Each item names the sibling, its commit and what would make it done here. Nothing in this list is
+implemented; §8b, §9 and §10 are the older open work.
+
+- **MCP image results are offloaded by `agy`** (`magpie-community/plugins` `6e0cecb`, 2026-11-14;
+  `packages/agy-cli`): a tool result carrying an image came back to the model as `media_0.jpg`,
+  invisible, and the agent re-read it 8 times; their fix text-acks the MCP call, waits for the tool
+  commit, steers, and puts the image in the next prompt. Ours hands the image to MCP as it is
+  (`src/mcp/broker.ts:165-174`). Done when a screenshot result is read once and the model names
+  what it saw, with the relay and usage settlement unchanged.
+- **A session opened before a prompt was reworded is resumed anyway** (`1c3c58b`, `fc941f6`):
+  they hash the *outgoing* instructions and keep a user-cloak epoch, so a session holding the old
+  text is not reused. We compare the client's original text (`src/sessions/shelf-store.ts:994`,
+  `src/sessions/coordinator.ts:480-503`) and send the transformed text separately
+  (`src/runtime/worker.ts:775-782`). Done when flipping `cloak_prompts` or changing
+  `cloak_said_as` forces one cold start instead of a resume that still carries the old append.
+- **The always-loaded tool catalog has no aggregate budget** (`6646797`, `9126c46`): they fit it to
+  18k estimated tokens of a 20k shared CLI budget, keeping names, types, enums, required and
+  bounds. Our 256 KiB/8192-node limits are per-schema translation guards
+  (`src/mcp/schema/sanitizer.ts:50-55`). Done when a 130-tool catalog still reaches `agy` whole, or
+  says what it dropped.
+- **One structured row per native-session decision** (`1a08f08`): a conversation digest, a reason
+  (`no_live`, workdir, instructions, history, cloak epoch) and counts, rate-limited, no prompt
+  text. Ours has the reasons but writes none of them. Done when a cache-miss incident is readable
+  from the log without the transcript.
+- **Compaction intent is recognised loosely** (`DylanLIiii/opencode-antigravity-bridge` `d032a43`,
+  `84ffd25`): ours trims the middle of an oversized turn whenever `<conversation>` appears anywhere
+  in it (`src/sessions/prompt-render.ts:420-459`), which any XML discussion satisfies; they match
+  the stock prompt by hash and refuse a compaction request that cannot fit rather than invite
+  another compaction. Done when a quoted `<conversation>` sample is not treated as a compaction
+  request.
+- **A relayed call may complete without its result** (`fdkevin0/pi-agy-acp` `d64a548`): they hold
+  the answer while any relayed id is unretrieved and refuse a premature `end_turn`. We shelve a
+  result when nobody waits (`src/mcp/broker.ts:294-300`) and can continue after the native prompt
+  ended (`src/runtime/worker.ts:2034-2055`), which is a fallback, not a gate. Done when a turn
+  cannot finish on an answer written before a relayed result was delivered — keeping our
+  continuation, and without their silent 65,536-character truncation.
+- **`error: null` is read as success** (`d64a548`): `src/runtime/acp-connection.ts:242-257`.
+  Done when a malformed error envelope fails the request instead of resolving `undefined`.
+- **Only real billing metadata is deleted** (`DylanLIiii` `b2baef1`): our
+  `stripBillingHeader` deletes any line starting with the header, inside a fenced example too, and
+  does so with cloaking off (`src/protocol/cloak.ts:119-127`). Done when a quoted example keeps its
+  line and the cache-stability reason for deleting the real one is still met.
 
 ## Optional refinements
 

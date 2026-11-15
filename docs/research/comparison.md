@@ -87,7 +87,13 @@ linked documents.
 | Read a turn's usage from the prompt result | estebanforge | adopted in 0.1.10, with SQLite step rows as fallback |
 | Ask again a `400` the model itself caused, holding its thought back so the retry is invisible | `magpie-community/antigravity` 0.1.14 (direct HTTP) | adopted in 0.1.11: once, only when nothing but a thought reached the caller, with a 10 s / 512 KiB hold |
 | Never pass a region-shaped vendor sentence through in a detail, since Magpie's `regionWords` overrides any status | `magpie-community/antigravity` 0.1.14 | adopted in 0.1.11 as a fixed sentence Magpie has no predicate for |
-| Session key from the first real user turn, skipping injected preambles, when the host names no session | `magpie-community/antigravity` 0.1.14 | open ([plan](../plan.md)); here a header-less request is stateless, which renders the whole history every turn |
+| Session key from the first real user turn, skipping injected preambles, when the host names no session | `magpie-community/antigravity` 0.1.14 | open ([plan](../plan.md) §9); smaller than it read — behind Magpie the host names the conversation |
+| Refused-identity list kept current with the vendor (ten lines since 2026-11-14 evening) | `magpie-community/agy-cli` 0.1.54 (`a617ecf`) | adopted in 0.1.11 |
+| Fence a session on the *outgoing* prompt, not the client's, so a reworded session is not resumed | `magpie-community/agy-cli` 0.1.49 (`1c3c58b`), 0.1.53 (`fc941f6`) | open ([plan](../plan.md) §11) |
+| Fit the whole always-loaded tool catalog to the CLI's customization budget | `magpie-community/agy-cli` 0.1.46 (`6646797`) | open ([plan](../plan.md) §11) |
+| Text-ack an image-bearing tool result and put the image in the next prompt | `magpie-community/agy-cli` 0.1.45 (`6e0cecb`) | open ([plan](../plan.md) §11) |
+| Recognise a compaction request by the stock prompt, not by an XML marker somewhere | `DylanLIiii/opencode-antigravity-bridge` (`d032a43`) | open ([plan](../plan.md) §11) |
+| Hold the answer while a relayed call is unretrieved; refuse a premature `end_turn` | `fdkevin0/pi-agy-acp` (`d64a548`) | open ([plan](../plan.md) §11) |
 | Inactivity watchdog with a separate long window while tools run | zacbemis; also tianzuo555, estebanforge | adopted in 0.1.10 (10 / 60 min, wall clock as backstop) |
 | Fail instead of truncating when information would be lost | zacbemis | adopted in 0.1.10 for a raw oversized turn; a client's own `<conversation>` compaction request is still trimmed, by design |
 | "Usage Limit Reached ... reset in" as a named window and `Retry-After` source | zacbemis | adopted in 0.1.10 for relative resets; absolute resets open ([plan](../plan.md)) |
