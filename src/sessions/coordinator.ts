@@ -203,8 +203,10 @@ export class SessionCoordinator {
     options?: TurnExecutionOptions,
   ): string {
     const cloak = cloakEnabled(options?.providerOptions, this.providerOptions);
+    // Same precedence as `cloakEnabled`: a caller's own turn wins over the
+    // provider-wide state, or the digest would describe text nobody sent.
     const saidAs =
-      this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs;
+      options?.providerOptions?.cloakSaidAs ?? this.providerOptions?.cloakSaidAs;
     return outgoingSystemDigest(
       buildEffectiveSystemText(req.system, req.workDir, cloak, saidAs),
       cloak,
@@ -1409,7 +1411,7 @@ export class SessionCoordinator {
       req.messages,
     );
     const cloakSaidAs =
-      this.providerOptions?.cloakSaidAs ?? options?.providerOptions?.cloakSaidAs;
+      options?.providerOptions?.cloakSaidAs ?? this.providerOptions?.cloakSaidAs;
     const effectiveSystem = buildEffectiveSystemText(
       req.system,
       req.workDir,

@@ -1829,8 +1829,13 @@ async function* untilAborted<T>(
       Promise.resolve(iterator.return?.()).catch(() => {});
     } else {
       // Awaited: the runtime's own `finally` retires the worker, and a caller that
-      // checks the retirement right after this response must see it done.
-      await iterator.return?.();
+      // checks the retirement right after this response must see it done. A
+      // throwing `return()` must not replace the error the caller is being told.
+      try {
+        await iterator.return?.();
+      } catch {
+        // The original error, or the response, is the one that stands.
+      }
     }
   }
 }
