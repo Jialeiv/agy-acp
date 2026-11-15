@@ -1775,35 +1775,46 @@ async function* untilAborted<T>(
   signal: AbortSignal | undefined,
 ): AsyncGenerator<T> {
   const iterator = events[Symbol.asyncIterator]();
-  if (!signal) {
-    try {
-      for (;;) {
-        const step = await iterator.next();
-        if (step.done === true) return;
-        yield step.value;
-      }
-    } finally {
-      // Awaited: the runtime's own `finally` retires the worker, and a caller that
-      // asserts the retirement right after this response must see it done.
-      await iterator.return?.();
-    }
-  }
-  const aborted = new Promise<"aborted">((resolve) => {
-    if (signal.aborted) {
-      resolve("aborted");
-      return;
-    }
-    signal.addEventListener("abort", () => resolve("aborted"), { once: true });
-  });
+  let abandoned = false;
+  const aborted = signal
+    ? new Promise<"aborted">((resolve) => {
+        if (signal.aborted) {
+          resolve("aborted");
+          return;
+        }
+        signal.addEventListener("abort", () => resolve("aborted"), {
+          once: true,
+        });
+      })
+    : null;
   try {
     for (;;) {
-      const step = await Promise.race([iterator.next(), aborted]);
-      if (step === "aborted") return;
+      if (signal?.aborted === true) {
+        abandoned = true;
+        return;
+      }
+      const step =
+        aborted === null
+          ? await iterator.next()
+          : await Promise.race([iterator.next(), aborted]);
+      if (step === "aborted") {
+        abandoned = true;
+        return;
+      }
       if (step.done === true) return;
       yield step.value;
     }
   } finally {
-    await iterator.return?.();
+    if (abandoned) {
+      // Not awaited: a source suspended in an unresolved `await` only settles its
+      // `return()` once that does, so waiting here would keep a caller that has
+      // already gone from ever being answered.
+      Promise.resolve(iterator.return?.()).catch(() => {});
+    } else {
+      // Awaited: the runtime's own `finally` retires the worker, and a caller that
+      // checks the retirement right after this response must see it done.
+      await iterator.return?.();
+    }
   }
 }
 

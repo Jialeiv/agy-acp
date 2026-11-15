@@ -1754,10 +1754,13 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     }
     const warm = coordinator.getActiveWorker(key)!;
     expect(warm).toBeDefined();
-    const follow = (extra: string) => ({
+    // Built from the worker the turn actually continues: taking the history from a
+    // retired one would make the coordinator cold-start for divergence instead, and
+    // the fence's own comparison would never be exercised.
+    const followFrom = (w: typeof warm, extra: string) => ({
       ...req1,
       messages: [
-        ...warm.committedMessages,
+        ...w.committedMessages,
         { role: "user" as const, content: [{ type: "text" as const, text: extra }] },
       ],
     });
@@ -1765,7 +1768,7 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     // Control: the same mode and the same system text still reuse the session.
     for await (const _ of coordinator.executeTurn(
       testAccount,
-      follow("same mode"),
+      followFrom(warm, "same mode"),
       selection,
       optionsFor(false),
     )) {
@@ -1778,7 +1781,7 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     // session opened without it is not continued: the old prompt would be sent.
     for await (const _ of coordinator.executeTurn(
       testAccount,
-      follow("cloak on now"),
+      followFrom(warm, "cloak on now"),
       selection,
       optionsFor(true),
     )) {
@@ -1789,9 +1792,10 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     expect(second).not.toBe(warm);
 
     // Same for the caller's own pairs, when one of them matches the system text.
+    expect(coordinator.getActiveWorker(key)).toBe(second);
     for await (const _ of coordinator.executeTurn(
       testAccount,
-      follow("said as changed"),
+      followFrom(second, "said as changed"),
       selection,
       optionsFor(true, "ALPHA=BETA"),
     )) {

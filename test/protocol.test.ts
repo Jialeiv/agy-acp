@@ -2065,6 +2065,21 @@ describe("collectAnthropicJsonResponse", () => {
     );
     expect(response.status).toBe(499);
     expect(Date.now() - started).toBeLessThan(2000);
+
+    // A real async generator suspended in its own unresolved `await`: its
+    // `return()` queues behind that await, so the abort path may not wait for it.
+    const controller2 = new AbortController();
+    async function* suspended(): AsyncGenerator<any> {
+      await new Promise<never>(() => {});
+      yield { type: "finish", stopReason: "end_turn", usage: USAGE };
+    }
+    setTimeout(() => controller2.abort(), 20);
+    const second = await collectAnthropicJsonResponse(
+      MODEL,
+      suspended(),
+      controller2.signal,
+    );
+    expect(second.status).toBe(499);
   });
 
   test("a caller that already went away is answered 499, as the streaming path does", async () => {
