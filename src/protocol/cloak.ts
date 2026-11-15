@@ -3,9 +3,10 @@
 
 /**
  * Lines Antigravity answers a `429` to whatever quota is left, each measured on a
- * real account: the first six on 2026-11-14 (5 of 5 each), the last four from the
+ * real account: the first six on 2026-11-14 (5 of 5 each), the next four from the
  * evening of 2026-11-14 (3 of 3 or 5 of 5, on `gemini-3-flash` and
  * `claude-sonnet-4-6` alike), as `packages/agy-cli/cloak.mjs` records them.
+ * #1 isolates the final Claude Code opening line and its rewording.
  *
  * The Hermes persona is matched in two pieces because Google reads it as
  * "You're Hermes Agent, …" too: rewording the opening alone is not enough, so
@@ -22,6 +23,7 @@ const TURNED_AWAY: readonly string[] = [
   "you are opencode",
   "you are a coding agent running in the codex cli",
   "a coding assistant running inside pi",
+  "you are claude code",
 ];
 
 function asciiLower(s: string): string {
@@ -114,6 +116,11 @@ const SAID_AS: ReadonlyArray<(line: string) => string> = [
   youre,
   youre,
   (line) => line.replace(/inside/i, "within"),
+  (line) =>
+    line.replace(
+      /you(\s+)are(\s+)claude(\s+)code/i,
+      "You are a coding assistant",
+    ),
 ];
 
 /**
@@ -241,7 +248,7 @@ export function cloakUserText(text: string, enabled = false): string {
   return applyTriggers(text, CODEX_TRIGGERS);
 }
 
-const ALL_TRIGGERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+const ALL_TRIGGERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 const CODEX_TRIGGERS = [2, 3] as const;
 
 /** Rewrites every match of the given trigger indices, left to right. */
