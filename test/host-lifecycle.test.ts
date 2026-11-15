@@ -72,12 +72,46 @@ afterAll(() => {
   fs.rmSync(TEMP_ROOT, { recursive: true, force: true });
 });
 
-function isPidAlive(pid: number): boolean {
+/** Linux `/proc/<pid>/stat` state, or `null` when the pid is gone / not Linux. */
+function linuxProcState(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const closeParen = stat.lastIndexOf(")");
+    if (closeParen < 0) return null;
+    const state = stat.slice(closeParen + 2, closeParen + 3);
+    return state || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True only for a process that can still run. Linux zombies (`Z`) and dead
+ * (`X`/`x`) stay visible to `kill(pid, 0)` until init reaps them; those are
+ * not leaks.
+ */
+function isPidRunning(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  const state = linuxProcState(pid);
+  if (state === "Z" || state === "X" || state === "x") return false;
+  if (state) return true;
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err: unknown) {
+    return (err as { code?: string })?.code === "EPERM";
+  }
+}
+
+async function pidStillRunningAfter(
+  pid: number,
+  timeoutMs = 500,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!isPidRunning(pid)) return false;
+    if (Date.now() >= deadline) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
@@ -216,13 +250,17 @@ function runSignalChild(
     });
     child.on("close", (code, diedSignal) => {
       clearTimeout(timer);
-      resolve({
-        code,
-        signal: diedSignal,
-        stderr,
-        workerPid,
-        workerAlive: workerPid != null && isPidAlive(workerPid),
-      });
+      void (async () => {
+        const workerAlive =
+          workerPid != null && (await pidStillRunningAfter(workerPid));
+        resolve({
+          code,
+          signal: diedSignal,
+          stderr,
+          workerPid,
+          workerAlive,
+        });
+      })();
     });
   });
 }
