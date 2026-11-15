@@ -1477,10 +1477,12 @@ describe("Phase 3: ARCH-2 TurnContext, StepUsageTracker, worker.pin(), scheduler
     tc.appendThinking("thinking one");
     expect(queue.pendingBytes).toBe(0);
     expect(tc.answerDelivered).toBe(false);
+    expect(tc.outputEscaped).toBe(false);
 
     // Released, in order, the moment the answer starts.
     tc.pushEvent({ type: "text_delta", text: "the answer" });
     expect(tc.answerDelivered).toBe(true);
+    expect(tc.outputEscaped).toBe(true);
     expect(await queue.next()).toEqual({
       value: { type: "thinking_delta", thinking: "thinking one" },
       done: false,
@@ -1520,6 +1522,9 @@ describe("Phase 3: ARCH-2 TurnContext, StepUsageTracker, worker.pin(), scheduler
       value: { type: "thinking_delta", thinking: "long thought" },
       done: false,
     });
+    // A thought the deadline released has been read: the turn can no longer be
+    // asked again, which `worker.askThinInvalidArgumentAgain` checks.
+    expect(tc3.outputEscaped).toBe(true);
     tc3.closeQueue();
   });
 

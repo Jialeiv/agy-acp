@@ -533,6 +533,15 @@ describe("extractErrorEvidence and classifyAgentFailure", () => {
     // learns to retry the turn on another account whatever status we answer
     // (`fallback.go:2172`, `routing.go:1435`), so the fact is said in words that
     // predicate has none of. Anything short of its exact phrases still passes.
+    // Magpie's `refusedWords` makes any 4xx retryable (fallback.go:2065-2069), so a
+    // stopped verdict may not echo them either.
+    for (const said of [
+      "PERMISSION_DENIED: request came through an unapproved channel",
+      "illegal api invocation",
+      "the system prompt carries another agent's identity line",
+    ]) {
+      expect(limitFreeDetail(said)).toBe("");
+    }
     for (const said of [
       "FAILED_PRECONDITION: User location is not supported for the API use.",
       "unsupported_country_region_territory",
@@ -1053,6 +1062,120 @@ describe("AgySessionWorker diagnostics integration", () => {
         .join("");
       expect(answer).toBe("The answer is Option A");
       expect(events.find((e) => e.type === "error")).toBeUndefined();
+    } finally {
+      await worker.close("test_done");
+    }
+  });
+
+  test("a rejected prompt nothing reached the caller from is asked again", async () => {
+    const ws = makeTempDir("worker-thin-retry-");
+    let prompts = 0;
+    const worker = new AgySessionWorker(account, "diag-sess-thin-retry", mcpServer, {
+      workspaceDir: ws,
+      spawnFn: () =>
+        createScriptedFakeAcpChild(ws, (ctx, turn) => {
+          prompts += 1;
+          if (turn === 1) {
+            ctx.emitUpdate({
+              sessionId: NATIVE_SESSION_ID,
+              update: {
+                sessionUpdate: "agent_thought_chunk",
+                content: { text: "shaping the call" },
+              },
+            });
+            setTimeout(
+              () =>
+                ctx.failTurn(
+                  "INVALID_ARGUMENT: request contains an invalid argument.",
+                ),
+              30,
+            );
+            return;
+          }
+          ctx.emitUpdate({
+            sessionId: NATIVE_SESSION_ID,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { text: "answered-once" },
+            },
+          });
+          ctx.finishTurn();
+        }),
+    });
+
+    try {
+      await worker.start();
+      const events = await runTurn(worker, "make me a call");
+      const answer = events
+        .filter((e) => e.type === "text_delta")
+        .map((e) => (e as Extract<TurnStreamEvent, { type: "text_delta" }>).text)
+        .join("");
+      expect(answer).toContain("answered-once");
+      expect(events.find((e) => e.type === "error")).toBeUndefined();
+      // The failed attempt's thought was held, so it was never said, and the
+      // caller read one answer.
+      const thinking = events
+        .filter((e) => e.type === "thinking_delta")
+        .map((e) => (e as Extract<TurnStreamEvent, { type: "thinking_delta" }>).thinking)
+        .join("");
+      expect(thinking).toBe("");
+      expect(prompts).toBe(2);
+    } finally {
+      await worker.close("test_done");
+    }
+  });
+
+  test("a rejected prompt is not asked again once its thought has gone out", async () => {
+    const ws = makeTempDir("worker-thin-escaped-");
+    let prompts = 0;
+    // A hold short enough that the failed attempt's thought reaches the caller
+    // before the failure does, as a long thinking turn does in production.
+    const worker = new AgySessionWorker(account, "diag-sess-thin-escaped", mcpServer, {
+      workspaceDir: ws,
+      thinkingHoldMs: 10,
+      spawnFn: () =>
+        createScriptedFakeAcpChild(ws, (ctx, turn) => {
+          prompts += 1;
+          if (turn === 1) {
+            ctx.emitUpdate({
+              sessionId: NATIVE_SESSION_ID,
+              update: {
+                sessionUpdate: "agent_thought_chunk",
+                content: { text: "shaping the call" },
+              },
+            });
+            setTimeout(
+              () =>
+                ctx.failTurn(
+                  "INVALID_ARGUMENT: request contains an invalid argument.",
+                ),
+              60,
+            );
+            return;
+          }
+          ctx.emitUpdate({
+            sessionId: NATIVE_SESSION_ID,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { text: "should not have been asked" },
+            },
+          });
+          ctx.finishTurn();
+        }),
+    });
+
+    try {
+      await worker.start();
+      const events = await runTurn(worker, "make me a call");
+      const thinking = events
+        .filter((e) => e.type === "thinking_delta")
+        .map((e) => (e as Extract<TurnStreamEvent, { type: "thinking_delta" }>).thinking)
+        .join("");
+      expect(thinking).toContain("shaping the call");
+      expect(events.find((e) => e.type === "error")).toBeDefined();
+      // Asked once: the caller already read the thought of the attempt that
+      // failed, so asking again would say it twice.
+      expect(prompts).toBe(1);
     } finally {
       await worker.close("test_done");
     }

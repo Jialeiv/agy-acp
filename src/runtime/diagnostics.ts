@@ -618,6 +618,9 @@ export function upstreamDetail(text: string, limit = 400): string {
  * not appended at all: the fixed sentence is the truthful one there, and Magpie
  * reads the appended bytes too.
  */
+const REFUSED_WORDS_RE =
+  /unapproved channel|illegal api invocation|system prompt carries another agent's identity line/i;
+
 const REGION_REFUSED_RE =
   /user location is not supported for the api use|unsupported_country_region_territory|country, region,? or territory not supported/i;
 
@@ -625,12 +628,12 @@ const REGION_REFUSED_RE =
  * What a region-shaped refusal is said as, so Magpie does not read the vendor's
  * own words for it.
  *
- * Magpie's `regionWords` (`internal/gateway/fallback.go:1887`) reads Google's
- * sentence as "not the account's problem": `retryable()` counts it
- * (`fallback.go:2172`) and `failure()` rests nothing, counting no failure
- * (`routing.go:1435`), so a turn this plugin stopped is walked to another account
- * all the same — the one thing `account_failover: false` exists to prevent. The
- * fact still reaches the reader, in words Magpie has no predicate for.
+ * Magpie's `regionWords` (`internal/gateway/fallback.go:1887`) makes a `400` or
+ * `422` retryable in `retryable()`'s last case (`fallback.go:2075-2085`), so a
+ * `400` body carrying Google's sentence sends the same request to another account
+ * however we meant it — a stop that never stops. It reads no other status that
+ * way (`409` among them), and `failure()` rests nothing on it (`routing.go:1435`).
+ * The fact still reaches the reader, in words Magpie has no predicate for.
  */
 const CONNECTION_LOCATION_REFUSED =
   "the vendor refused the location this connection came from";
@@ -650,6 +653,11 @@ export function limitFreeDetail(text: string): string {
     return "";
   }
   if (REGION_REFUSED_RE.test(cleaned)) return CONNECTION_LOCATION_REFUSED;
+  // Magpie's `refusedWords` makes *any* `4xx` retryable (`fallback.go:2065-2069`),
+  // not just a `400`, so a stopped verdict echoing one of those phrases would be
+  // walked to another account. They are the vendor's words for a prompt it turned
+  // away, which is what this plugin already says in its own message.
+  if (REFUSED_WORDS_RE.test(cleaned)) return "";
   return upstreamDetail(cleaned);
 }
 

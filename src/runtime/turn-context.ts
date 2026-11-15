@@ -207,6 +207,12 @@ export class TurnContext {
   private delivered = false;
   /** True once anything but a thought reached the caller (answer or tool call). */
   private answered = false;
+  /**
+   * True once any byte reached the caller, a released thought included. A prompt
+   * that failed after that cannot be asked again: the caller already read the
+   * attempt that failed, and the same thoughts would be said twice.
+   */
+  private escaped = false;
   /** Held thought while the turn may still be asked again; `null` once released. */
   private thinkingHeld: string | null = "";
   private thinkingHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -353,6 +359,7 @@ export class TurnContext {
     this.held = "";
     this.delivered = false;
     this.answered = false;
+    this.escaped = false;
     this.thinkingHeld = "";
     this.clearThinkingHoldTimer();
     this.thinInvalidAskedAgain = false;
@@ -410,6 +417,7 @@ export class TurnContext {
       this.answered = true;
     }
     this.quietQueue?.push(event);
+    this.escaped = true;
   }
 
   /**
@@ -420,6 +428,7 @@ export class TurnContext {
     this.thinking += delta;
     if (delta.trim() !== "") this.delivered = true;
     if (this.thinkingHeld === null) {
+      if (delta !== "") this.escaped = true;
       this.quietQueue?.push({ type: "thinking_delta", thinking: delta });
       return;
     }
@@ -434,6 +443,11 @@ export class TurnContext {
   /** True once an answer or a tool call reached the caller. */
   get answerDelivered(): boolean {
     return this.answered;
+  }
+
+  /** True once any byte reached the caller, a released thought included. */
+  get outputEscaped(): boolean {
+    return this.escaped;
   }
 
   /** True once this turn's `INVALID_ARGUMENT` has already been asked again. */
@@ -456,6 +470,7 @@ export class TurnContext {
     const held = this.thinkingHeld;
     this.thinkingHeld = null;
     if (held !== "") {
+      this.escaped = true;
       this.quietQueue?.push({ type: "thinking_delta", thinking: held });
     }
   }

@@ -291,6 +291,14 @@ rl.on("line", async (line) => {
     if (promptText.includes("TRIGGER_INVALID_ARGUMENT")) {
       invalidArgumentAttempts += 1;
       const always = promptText.includes("TRIGGER_INVALID_ARGUMENT_ALWAYS");
+      // The AFTER_TEXT variant answers part of it before failing: the caller has
+      // read something, so the turn may not be asked again.
+      if (promptText.includes("TRIGGER_INVALID_ARGUMENT_AFTER_TEXT")) {
+        notify("session/update", {
+          sessionUpdate: "agent_message_chunk",
+          content: { text: "partial answer" },
+        });
+      }
       if (always || invalidArgumentAttempts === 1) {
         notify("session/update", {
           sessionUpdate: "agent_thought_chunk",

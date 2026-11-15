@@ -15,6 +15,16 @@ Unpublished. Work dated 2026-11-15.
   a vendor check, which the terms treat as circumvention; the switch turns it off, and the README
   says what that costs. Claude Code's rotating billing header is dropped either way, and detection
   of a refusal never depended on the switch.
+- **Five refused identities added, and the retry now needs its invariant.** The trigger list goes
+  from six lines to the ten `agy-cli` 0.1.54 carries: the upstream began refusing OpenCode's
+  opening, the Codex CLI's line for a model with no prompt of its own, pi's default agent line and
+  the Hermes persona (as two pieces, since "You're Hermes Agent" is refused as well) on the evening
+  of 2026-11-14, measured 3 of 3 to 5 of 5 on a real account on `gemini-3-flash` and
+  `claude-sonnet-4-6` alike. `refusalHint` names the harness it found. Asking a rejected prompt
+  again is now limited to the case where nothing reached the caller at all
+  (`TurnContext.outputEscaped`): after the hold's deadline has released a thought, the caller has
+  read the failed attempt and the retry would say it twice. A steer or cancel during the retry's
+  300 ms pause also stops it, instead of answering a turn nobody is reading.
 - **A `400` the model itself caused is asked once more.** Gemini 4 answers `INVALID_ARGUMENT` to a
   request it shaped after it had already run, and the same conversation asked again has answered.
   The prompt goes again exactly once — same session, same payload, only when nothing but a thought
@@ -23,12 +33,14 @@ Unpublished. Work dated 2026-11-15.
   is now held back for up to 10 s or 512 KiB, released the moment an answer or a tool call starts,
   and dropped when the turn is asked again: no thinking said twice, and a long thinking turn
   delayed by at most ten seconds.
-- **Google's region sentence is no longer passed through in a detail.** Magpie's `regionWords`
-  reads "User location is not supported for the API use" as not the account's problem —
-  `retryable()` counts it (`fallback.go:2172`) and `failure()` rests nothing (`routing.go:1435`) —
-  so a body carrying it walked to another account whatever status we answered, `409` included. It
-  is said instead as "the vendor refused the location this connection came from": the reader still
-  learns what happened, and the predicate that would override the stop does not match.
+- **Two words that decide routing are kept out of a detail.** Magpie reads the whole body, so
+  `regionWords` makes a `400`/`422` retryable (`fallback.go:2075-2085`) and Google's "User
+  location is not supported for the API use" in one of our `400`s sent the same request to another
+  account; it is said instead as "the vendor refused the location this connection came from".
+  `refusedWords` is worse: since 2026-11-13 it makes **any** `4xx` retryable
+  (`fallback.go:2065-2069`), so a stopped verdict echoing "unapproved channel" or "illegal api
+  invocation" would have walked the pool whatever status we chose — a detail containing one is now
+  dropped.
 
 Found while comparing against `@magpie-community/opencode-antigravity-auth` 0.1.14; both fixes are
 theirs in substance, and `docs/error-routing.md` §3.1 records why each wording is what it is.

@@ -149,9 +149,11 @@ What this plugin does about the mechanism, without claiming the motive:
   evidence about the account, not about the prompt, so it is not converted into that hint.
 - **Still open:** every `5xx` is retryable and a plugin cannot change that, so a vendor-wide
   failure may still reach another account. Magpie's own group routing can stop that for
-  every provider: `AffinityStrict` keeps a conversation on the account that answered it,
-  and a `Manual` group sends only to the member the user picked
-  (`internal/provider/group.go:54-90`). A plugin can only choose a status the router does not
+  every provider: `AffinityStrict` keeps a conversation on the account that answered it, its
+  errors going to the agent rather than the conversation to another account
+  (`internal/provider/group.go:56-66`). A `Manual` group is not that: it picks the member
+  (provider) every request goes to, while that member's own accounts are still weighed and
+  rotated (`group.go:79-90`, `fallback.go:903-907`). A plugin can only choose a status the router does not
   follow; it cannot veto a retry any other way.
 
 ## Standing decisions

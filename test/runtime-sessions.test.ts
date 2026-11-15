@@ -1218,6 +1218,42 @@ describe("Runtime Sessions & Coordinator Integration", () => {
     expect(thinking).not.toContain("shaping the call");
   });
 
+  test("11d. A rejected call is not asked again once the caller has read something", async () => {
+    const sessionId = `test-thin-after-text-${Date.now()}`;
+    const req = makeReq(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "TRIGGER_INVALID_ARGUMENT_AFTER_TEXT" },
+          ],
+        },
+      ],
+      { model: "gemini-3.8-flash", system: "Thin test", sessionId },
+    );
+
+    const events: TurnStreamEvent[] = [];
+    for await (const event of coordinator.executeTurn(
+      testAccount,
+      req,
+      sel("gemini-3.8-flash"),
+    )) {
+      events.push(event);
+    }
+
+    const text = events
+      .filter((e): e is Extract<TurnStreamEvent, { type: "text_delta" }> => e.type === "text_delta")
+      .map((e) => e.text)
+      .join("");
+    expect(text).toContain("partial answer");
+    const errorEvent = events.find(
+      (e): e is Extract<TurnStreamEvent, { type: "error" }> => e.type === "error",
+    );
+    // The first attempt's words: a second would answer what the caller has
+    // already been told, and would hide which attempt failed.
+    expect(errorEvent?.message).toContain("attempt 1");
+  });
+
   test("11c. A rejected call that stays rejected is reported, not looped", async () => {
     const sessionId = `test-thin-always-${Date.now()}`;
     const req = makeReq(

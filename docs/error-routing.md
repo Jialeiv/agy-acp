@@ -199,13 +199,19 @@ Google's boilerplate; on its own it names no window.
   `THINKING_HOLD_MAX_BYTES` in `src/runtime/turn-context.ts`), released the moment the answer or a
   tool call starts, and dropped when the turn is asked again: a long thinking turn is delayed by at
   most ten seconds, and a failed attempt's thinking is never said twice.
-- **A region-shaped detail is not passed through.** Magpie's `regionWords`
-  (`internal/gateway/fallback.go:1887`) reads Google's "User location is not supported for the API
-  use" as not the account's problem: `retryable()` counts it (`fallback.go:2172`) and `failure()`
-  rests nothing and counts no failure (`routing.go:1435`), so a body carrying it is retried on
-  another account whatever status the plugin answered, `409` included. The fact is said instead as
-  "the vendor refused the location this connection came from", which Magpie has no predicate for.
-  Wording short of those three exact phrases still passes through unchanged.
+- **Two vocabularies are kept out of a detail, at the statuses where they decide.** Magpie reads
+  the whole body:
+  - `regionWords` (`fallback.go:1887`) makes a **`400` or `422`** retryable (`retryable()`,
+    `fallback.go:2075-2085`), so Google's "User location is not supported for the API use" in a
+    detail of our `invalid_request` or overflow answer sends the same request to another account.
+    It is said instead as "the vendor refused the location this connection came from", which no
+    predicate matches. It carries no such weight at `409`: no status but `400`/`422` is read that
+    way.
+  - `refusedWords` (`fallback.go:1793`: "unapproved channel", "illegal api invocation", "system
+    prompt carries another agent's identity line") makes **any `4xx`** retryable
+    (`fallback.go:2065-2069`, a rule added on 2026-11-13). A stopped verdict echoing one of them
+    would therefore be walked to another account, so a detail containing one is dropped outright.
+  Wording short of those exact phrases still passes through unchanged.
 
 ## 4. Upstream retry notices and retry storms
 
@@ -276,7 +282,17 @@ spaces, or wrapped after a comma, is still that line. Since 2026-11-14 the upstr
 those broken-up copies, so the cloak rewords each line the way `agy-cli/cloak.mjs` does
 (`based on` -> `built on`, `created by` -> `built by`, `keywords` -> `key words`, the Agent SDK
 line -> "built on the Agent SDK by Anthropic", and Claude Code's billing line dropped).
-Zero-width insertion is no defence and is not used. The same matcher feeds `refusalHint`, so a
+Zero-width insertion is no defence and is not used.
+
+The list is ten lines since 0.1.11, matching that package: the four the upstream began refusing on
+the evening of 2026-11-14 are OpenCode's opening, the Codex CLI's line for a model with no prompt
+of its own, pi's default agent line, and the Hermes persona, which needs two pieces — "You are"
+-> "You're" is not enough on its own, so its "created by" clause goes as well. Those three go as
+"You're …" and pi's "inside" as "within"; each was answered 5 of 5 reworded on a real account,
+3 of 3 for the Hermes pair. A harness's line that went through as written stays as written (Cline,
+and Codex's GPT-6 line), and a user's turn still gets only the two Codex lines: the others were
+measured passing there. `refusalHint` names the harness whose line was found, in words that carry
+no limit vocabulary. The same matcher feeds `refusalHint`, so a
 prompt that still trips the refusal is reported as a prompt refusal, not as an account's quota.
 
 `cloak_prompts` is **on by default** since 0.1.11, as in the standalone bridge for this vendor: a

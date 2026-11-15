@@ -1,13 +1,27 @@
 // Ported from MIT-licensed `packages/agy-cli/cloak.mjs` & volatile-system
 // helpers in `packages/agy-cli/index.mjs` (magpie-community/plugins).
 
+/**
+ * Lines Antigravity answers a `429` to whatever quota is left, each measured on a
+ * real account: the first six on 2026-11-14 (5 of 5 each), the last four from the
+ * evening of 2026-11-14 (3 of 3 or 5 of 5, on `gemini-3-flash` and
+ * `claude-sonnet-4-6` alike), as `packages/agy-cli/cloak.mjs` records them.
+ *
+ * The Hermes persona is matched in two pieces because Google reads it as
+ * "You're Hermes Agent, …" too: rewording the opening alone is not enough, so
+ * the "created by" clause goes as well. The earlier long form is covered by both.
+ */
 const TURNED_AWAY: readonly string[] = [
   "x-anthropic-billing-header:",
   "built on anthropic's claude agent sdk",
   "you are codex, an agent based on gpt-5",
   "you are codex, a coding agent based on gpt-5",
-  "hermes agent, an intelligent ai assistant created by nous research",
   "rfc 2119 keywords: must, required, should, recommended, may, optional.",
+  "you are hermes agent",
+  "an intelligent ai assistant created by nous research",
+  "you are opencode",
+  "you are a coding agent running in the codex cli",
+  "a coding assistant running inside pi",
 ];
 
 function asciiLower(s: string): string {
@@ -80,6 +94,11 @@ export function turnsAway(system: string | undefined | null): boolean {
  * away. Claude Code's billing line is left out of the rewrites: it is Anthropic's
  * and no Antigravity model reads anything in it.
  */
+/** "You are X" -> "You're X": each of the three was answered 5 of 5 reworded so. */
+function youre(line: string): string {
+  return line.replace(/^(you)\s+are/i, "$1're");
+}
+
 const SAID_AS: ReadonlyArray<(line: string) => string> = [
   () => "",
   (line) =>
@@ -89,8 +108,12 @@ const SAID_AS: ReadonlyArray<(line: string) => string> = [
     ),
   (line) => line.replace(/based(\s+)on/i, "built$1on"),
   (line) => line.replace(/based(\s+)on/i, "built$1on"),
-  (line) => line.replace(/created(\s+)by/i, "built$1by"),
   (line) => line.replace(/(key)(words)/i, "$1 $2"),
+  youre,
+  (line) => line.replace(/created(\s+)by/i, "built$1by"),
+  youre,
+  youre,
+  (line) => line.replace(/inside/i, "within"),
 ];
 
 /**
@@ -218,7 +241,7 @@ export function cloakUserText(text: string, enabled = false): string {
   return applyTriggers(text, CODEX_TRIGGERS);
 }
 
-const ALL_TRIGGERS = [0, 1, 2, 3, 4, 5] as const;
+const ALL_TRIGGERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 const CODEX_TRIGGERS = [2, 3] as const;
 
 /** Rewrites every match of the given trigger indices, left to right. */
@@ -333,6 +356,14 @@ const HERMES_HINT =
   "Antigravity is reported to answer such a request with an error that looks like an account problem, " +
   `so this may not have been the account. ${ACCOUNT_STILL_WORKS} put it in SOUL.md, or use another ` +
   `provider for this prompt; ${OTHERWISE_ACCOUNT}`;
+const harnessHint = (harness: string): string =>
+  `This request failed while its system prompt carried ${harness}'s own opening line. ` +
+  "Antigravity is reported to answer such a request with an error that looks like an account problem, " +
+  `so this may not have been the account. ${ACCOUNT_STILL_WORKS} drop or reword that line, or use ` +
+  `another provider for this prompt; ${OTHERWISE_ACCOUNT}`;
+const OPENCODE_HINT = harnessHint("OpenCode");
+const CODEX_CLI_HINT = harnessHint("the Codex CLI");
+const PI_HINT = harnessHint("pi");
 const RFC_HINT =
   "This request failed while its system prompt carried the RFC 2119 line oh-my-pi starts with. " +
   "Antigravity is reported to answer such a request with an error that looks like an account problem, " +
@@ -341,9 +372,13 @@ const RFC_HINT =
 
 export function refusalHint(system: string | undefined | null): string {
   const hit = triggerMatches(String(system ?? ""));
-  // TURNED_AWAY order: billing, Claude Agent SDK, both Codex lines, Hermes, RFC 2119.
-  if (hit[5]) return RFC_HINT;
+  // TURNED_AWAY order: billing, Claude Agent SDK, both Codex lines, RFC 2119,
+  // Hermes (two pieces), OpenCode, the Codex CLI, pi.
+  if (hit[4]) return RFC_HINT;
   if (hit[2] || hit[3]) return CODEX_HINT;
-  if (hit[4]) return HERMES_HINT;
+  if (hit[5] || hit[6]) return HERMES_HINT;
+  if (hit[7]) return OPENCODE_HINT;
+  if (hit[8]) return CODEX_CLI_HINT;
+  if (hit[9]) return PI_HINT;
   return HINT;
 }

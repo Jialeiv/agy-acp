@@ -2383,6 +2383,75 @@ describe("cloaking scope", () => {
     expect(cloakUserText(codex, false)).toBe(codex);
   });
 
+  test("the lines refused since the evening of 11-14 are reworded too", () => {
+    const cases: Array<[string, string]> = [
+      [
+        "You are Hermes Agent, built by Nous Research.",
+        "You're Hermes Agent, built by Nous Research.",
+      ],
+      [
+        "You are Hermes Agent, an intelligent AI assistant created by Nous Research.",
+        "You're Hermes Agent, an intelligent AI assistant built by Nous Research.",
+      ],
+      [
+        "You are OpenCode, the best coding agent on the planet.",
+        "You're OpenCode, the best coding agent on the planet.",
+      ],
+      [
+        "You are a coding agent running in the Codex CLI.",
+        "You're a coding agent running in the Codex CLI.",
+      ],
+      [
+        "You are a coding assistant running inside pi, a coding agent harness.",
+        "You are a coding assistant running within pi, a coding agent harness.",
+      ],
+    ];
+    for (const [input, want] of cases) {
+      expect(turnsAway(input)).toBe(true);
+      expect(cloakSystemPrompt(input, true)).toBe(want);
+    }
+
+    // Harnesses that went through as written are left as written, GPT-6's Codex
+    // line included (only the GPT-5 ones are refused).
+    for (const line of [
+      "You are Cline, a highly skilled software engineer.",
+      "You are Codex, an agent based on GPT-6.",
+    ]) {
+      expect(turnsAway(line)).toBe(false);
+      expect(cloakSystemPrompt(line, true)).toBe(line);
+    }
+
+    // A user's turn still gets the two Codex lines and nothing else.
+    const opencode = "You are OpenCode, the best coding agent on the planet.";
+    expect(cloakUserText(opencode, true)).toBe(opencode);
+  });
+
+  test("a refusal hint names the harness, without a word Magpie reads as a limit", () => {
+    expect(refusalHint("You are OpenCode, the best coding agent on the planet.")).toContain(
+      "OpenCode's own opening line",
+    );
+    expect(refusalHint("You are Hermes Agent, built by Nous Research.")).toContain("Hermes");
+    expect(
+      refusalHint("You are a coding assistant running inside pi, a coding agent harness."),
+    ).toContain("pi's own opening line");
+    expect(refusalHint("You are a coding agent running in the Codex CLI.")).toContain(
+      "the Codex CLI",
+    );
+    // The two hard rules for anything that reaches Magpie in a body: no limit
+    // vocabulary (it is not a limit) and no verdict.
+    for (const hint of [
+      refusalHint("x-anthropic-billing-header: cch=1"),
+      refusalHint("You are Codex, an agent based on GPT-5."),
+      refusalHint("You are Hermes Agent, built by Nous Research."),
+      refusalHint("You are OpenCode, the best coding agent on the planet."),
+      refusalHint("You are a coding agent running in the Codex CLI."),
+      refusalHint("You are a coding assistant running inside pi."),
+      refusalHint("RFC 2119 keywords: MUST, REQUIRED."),
+    ]) {
+      expect(hint).not.toMatch(/quota|credit|balance|billing|region|insufficient/i);
+    }
+  });
+
   test("a rendered prompt rewrites user turns and quotes tool results as they came", () => {
     const messages = [
       {

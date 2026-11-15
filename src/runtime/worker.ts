@@ -121,6 +121,12 @@ export interface WorkerOptions {
   /** Caller-supplied `phrase=replacement` pairs applied after the built-in lines. */
   cloakSaidAs?: string;
   /**
+   * How long a thought is held before it may go to the caller, so a prompt the
+   * model turned down itself can be asked again without saying it twice.
+   * Defaults to `THINKING_HOLD_MS`; tests lower it.
+   */
+  thinkingHoldMs?: number;
+  /**
    * `account_failover`: may Magpie answer this turn from another account of this
    * provider after this one fails? Undefined keeps the retryable statuses (what a
    * worker built on its own describes); the coordinator always resolves the option.
@@ -393,7 +399,7 @@ export class AgySessionWorker {
     } catch {}
   }
 
-  private readonly turn = new TurnContext();
+  private readonly turn: TurnContext;
   private readonly usage = new StepUsageTracker();
   private unsubscribeSessionUpdate?: () => void;
   private unregisterMcp?: () => void;
@@ -421,6 +427,7 @@ export class AgySessionWorker {
     this.options = options ?? {};
     this.workDir = this.options.workDir;
     this.minimalAgent = Boolean(this.options.minimalAgent);
+    this.turn = new TurnContext({ thinkingHoldMs: this.options.thinkingHoldMs });
     this.steerCancelTimeoutMs = this.options.steerCancelTimeoutMs;
     this.steerToolCommitTimeoutMs = this.options.steerToolCommitTimeoutMs;
 
@@ -1838,8 +1845,9 @@ export class AgySessionWorker {
     if (this.turn.thinInvalidRetried) return false;
     if ((err as { acpTimeout?: boolean })?.acpTimeout) return false;
     if (this._state !== "GENERATING" || this.isClosed) return false;
-    // Everything the caller has seen is a thought that is still held back.
-    if (this.turn.answerDelivered) return false;
+    // Nothing may have reached the caller — not even a thought released by the
+    // hold's deadline or byte ceiling, which would then be said twice.
+    if (this.turn.outputEscaped) return false;
     const text = [err?.message, err?.data?.code, err?.data?.message]
       .filter((part) => typeof part === "string" && part !== "")
       .join(" ");
@@ -1852,7 +1860,10 @@ export class AgySessionWorker {
     this.armTurnIdleWatchdog();
     void (async () => {
       await new Promise((resolve) => setTimeout(resolve, THIN_INVALID_ARGUMENT_PAUSE_MS));
+      // The turn may have been steered, cancelled or replaced while this waited:
+      // asking again then would answer a turn nobody is reading any more.
       if (this._state !== "GENERATING" || this.isClosed) return;
+      if (this.turn.isSuppressedOrStale(seq)) return;
       const promise = this.conn.request(
         "session/prompt",
         payload,
