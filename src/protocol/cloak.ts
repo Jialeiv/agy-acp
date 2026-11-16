@@ -89,6 +89,13 @@ export function turnsAway(system: string | undefined | null): boolean {
   return text !== "" && triggerMatches(text).some(Boolean);
 }
 
+export function userTurnsAway(text: string | undefined | null): boolean {
+  const s = String(text ?? "");
+  if (!s) return false;
+  const hit = triggerMatches(s);
+  return Boolean(hit[2] || hit[3]);
+}
+
 /**
  * How each turned-away line goes instead, with its invisible characters taken
  * out and its white space kept: a rewording that keeps its meaning. Each was

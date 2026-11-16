@@ -1095,7 +1095,7 @@ export class SessionCoordinator {
         : renderMessagesToPrompt(priorMessages, currentMessages, { cloakUser: cloakPrompts });
       appendToolChoiceReminder(promptParts, req);
 
-      if (worker.effectiveSystemPrompt && !worker.appendSystemSupported) {
+      if (worker.effectiveSystemPrompt && !worker.appendClientSystemPrompt) {
         unshiftSystemInstructions(promptParts, worker.effectiveSystemPrompt);
       }
 
@@ -1481,7 +1481,7 @@ export class SessionCoordinator {
           })
         : renderMessagesToPrompt(priorMessages, currentMessages, { cloakUser: cloakPrompts });
       appendToolChoiceReminder(promptParts, req);
-      if (worker.effectiveSystemPrompt && !worker.appendSystemSupported) {
+      if (worker.effectiveSystemPrompt && !worker.appendClientSystemPrompt) {
         unshiftSystemInstructions(promptParts, worker.effectiveSystemPrompt);
       }
       for await (const event of worker.startPromptTurn(promptParts, signal)) {
